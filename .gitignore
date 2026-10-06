@@ -1,0 +1,6 @@
+node_modules/
+.env
+.shopify/
+build/
+.react-router/
+*.tsbuildinfo

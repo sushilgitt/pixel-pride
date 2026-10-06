@@ -1,0 +1,144 @@
+.index {
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  box-sizing: border-box;
+  color: #fff;
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  background:
+    radial-gradient(700px 360px at 90% -10%, rgba(34, 211, 238, 0.25), transparent 60%),
+    radial-gradient(700px 360px at 0% 110%, rgba(13, 148, 136, 0.3), transparent 60%),
+    #0B1530;
+}
+
+.content {
+  display: grid;
+  gap: 20px;
+  max-width: 880px;
+  width: 100%;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #BEF264;
+}
+
+.heading {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(36px, 6vw, 56px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.text {
+  margin: 0 auto 8px;
+  max-width: 560px;
+  font-size: 16px;
+  line-height: 1.6;
+  color: #9FB3C8;
+}
+
+.form {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 auto;
+}
+
+.label {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: #DCE6F2;
+}
+
+.label span:last-child {
+  font-size: 12px;
+  color: #7D90A8;
+}
+
+.input {
+  width: 300px;
+  max-width: 80vw;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: inherit;
+}
+
+.input:focus {
+  outline: none;
+  border-color: #5EEAD4;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.35);
+}
+
+.button {
+  padding: 12px 22px;
+  border: 0;
+  border-radius: 10px;
+  background: #BEF264;
+  color: #0B1530;
+  font: 700 14px/1 "Plus Jakarta Sans", sans-serif;
+  cursor: pointer;
+  margin-bottom: 22px;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.list > li {
+  text-align: left;
+  padding: 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 14px;
+  line-height: 1.55;
+  color: #9FB3C8;
+}
+
+.list > li strong {
+  display: block;
+  margin-bottom: 4px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 16px;
+  color: #fff;
+}
+
+@media only screen and (max-width: 50rem) {
+  .list {
+    grid-template-columns: 1fr;
+  }
+}
+
+.note {
+  margin: 0 auto;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: rgba(190, 242, 100, 0.1);
+  border: 1px solid rgba(190, 242, 100, 0.35);
+  color: #DCE6F2;
+  font-size: 14px;
+}
