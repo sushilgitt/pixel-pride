@@ -3,6 +3,7 @@ import { ChartVerticalIcon } from "@shopify/polaris-icons";
 import { useState, useCallback } from 'react';
 import { useLoaderData, useSubmit } from 'react-router';
 import { authenticate } from '../shopify.server';
+import { fetchAllProducts, imageNodes, MAX_MEDIA_PER_PRODUCT } from '../catalog.server';
 import {
   Page,
   Layout,
@@ -45,71 +46,32 @@ function getDateRange(timeRange) {
   return date;
 }
 
-/**
- * Fetch all products with pagination
- */
-async function fetchAllProducts(admin, cursor = null) {
-  const query = `#graphql
-    query GetProductsWithImages($cursor: String) {
-      products(first: 50, after: $cursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
+// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// 1 + media(2 + 40×2) + metafields(2 + 50) = 137, × 7 products ≈ 961.
+// Per-image records are keyed image_<MediaImage id>, so images are read from
+// `media` (MediaImage ids), not `images` (ProductImage ids, which never match).
+const PRODUCTS_QUERY = `#graphql
+  query AnalyticsProducts($cursor: String) {
+    products(first: 7, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        title
+        handle
+        media(first: ${MAX_MEDIA_PER_PRODUCT}) {
+          nodes { ... on MediaImage { id alt image { url } } }
         }
-        edges {
-          node {
-            id
-            title
-            handle
-            images(first: 250) {
-              edges {
-                node {
-                  id
-                  url
-                  altText
-                  width
-                  height
-                }
-              }
-            }
-            metafields(first: 20, namespace: "image_optimization") {
-              edges {
-                node {
-                  key
-                  value
-                  createdAt
-                  updatedAt
-                }
-              }
-            }
-          }
+        metafields(first: 50, namespace: "image_optimization") {
+          nodes { key value updatedAt }
         }
       }
     }
-  `;
-
-  const response = await admin.graphql(query, {
-    variables: { cursor }
-  });
-
-  return await response.json();
-}
+  }
+`;
 
 async function getAllProducts(admin) {
-  let allProducts = [];
-  let hasNextPage = true;
-  let cursor = null;
-
-  while (hasNextPage) {
-    const data = await fetchAllProducts(admin, cursor);
-    const products = data.data.products.edges.map(edge => edge.node);
-    allProducts = [...allProducts, ...products];
-
-    hasNextPage = data.data.products.pageInfo.hasNextPage;
-    cursor = data.data.products.pageInfo.endCursor;
-  }
-
-  return allProducts;
+  const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
+  return products;
 }
 
 /**
@@ -141,7 +103,7 @@ function processProductsData(products, timeRange) {
   let pageStats = [];
 
   products.forEach(product => {
-    const images = product.images.edges.map(edge => edge.node);
+    const images = imageNodes(product).map(n => ({ id: n.id, url: n.image.url, altText: n.alt }));
     const productUrl = `/products/${product.handle}`;
 
     let pageImageCount = 0;
@@ -163,21 +125,21 @@ function processProductsData(products, timeRange) {
       formatStats[format].count++;
 
       const imageKey = `image_${image.id.split('/').pop()}`;
-      const optimizationData = product.metafields.edges.find(
-        edge => edge.node.key === imageKey
+      const optimizationData = product.metafields.nodes.find(
+        node => node.key === imageKey
       );
 
       if (!optimizationData) return;
 
       try {
-        const optData = JSON.parse(optimizationData.node.value);
+        const optData = JSON.parse(optimizationData.value);
         if (typeof optData.originalSizeMB !== 'number' || typeof optData.optimizedSizeMB !== 'number') {
           return;
         }
 
         const originalSizeMB = optData.originalSizeMB;
         const optimizedSizeMB = optData.optimizedSizeMB;
-        const updatedAt = new Date(optData.optimizedAt || optimizationData.node.updatedAt);
+        const updatedAt = new Date(optData.optimizedAt || optimizationData.updatedAt);
 
         if (updatedAt < startDate) return;
 

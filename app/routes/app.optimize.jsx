@@ -9,6 +9,7 @@ import { entitled } from '../plans.server';
 import db from '../db.server';
 import { mapLimit, headSizeMB, optimizeBatch } from '../optimize.server';
 import { PixelMeter } from '../components/Pixels';
+import { fetchAllProducts, imageNodes, parseSummary, MAX_MEDIA_PER_PRODUCT } from '../catalog.server';
 import {
   Page,
   Layout,
@@ -27,61 +28,26 @@ import {
 /*  Product fetching (loader only)                                            */
 /* -------------------------------------------------------------------------- */
 
-async function fetchAllProducts(admin, cursor = null) {
-  const query = `#graphql
-    query GetProductsWithImages($cursor: String) {
-      products(first: 50, after: $cursor) {
-        pageInfo { hasNextPage endCursor }
-        edges {
-          node {
-            id
-            title
-            handle
-            status
-            featuredImage { id url altText width height }
-            images(first: 250) {
-              edges { node { id url altText width height } }
-            }
-            metafields(first: 250, namespace: "image_optimization") {
-              edges { node { key value } }
-            }
-          }
+// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// 1 + featuredMedia 3 + media(2 + 40×2) + summary 1 = 87, × 10 products ≈ 875.
+const PRODUCTS_QUERY = `#graphql
+  query OptimizerProducts($cursor: String) {
+    products(first: 10, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        title
+        handle
+        status
+        featuredMedia { preview { image { url } } }
+        media(first: ${MAX_MEDIA_PER_PRODUCT}) {
+          nodes { ... on MediaImage { id alt image { url } } }
         }
+        summary: metafield(namespace: "image_optimization", key: "optimization_summary") { value }
       }
     }
-  `;
-  const response = await admin.graphql(query, { variables: { cursor } });
-  return await response.json();
-}
-
-async function getAllProducts(admin) {
-  let allProducts = [];
-  let hasNextPage = true;
-  let cursor = null;
-  while (hasNextPage) {
-    const data = await fetchAllProducts(admin, cursor);
-    const products = data.data.products.edges.map(edge => edge.node);
-    allProducts = [...allProducts, ...products];
-    hasNextPage = data.data.products.pageInfo.hasNextPage;
-    cursor = data.data.products.pageInfo.endCursor;
   }
-  return allProducts;
-}
-
-// Parse the optimization_summary metafield (totals written by the action).
-function parseSummary(product) {
-  const mf = product.metafields.edges.find(e => e.node.key === 'optimization_summary');
-  if (!mf) return null;
-  try {
-    return JSON.parse(mf.node.value);
-  } catch {
-    return null;
-  }
-}
-
-function countProcessed(product) {
-  return product.metafields.edges.filter(e => e.node.key.startsWith('image_')).length;
-}
+`;
 
 /* -------------------------------------------------------------------------- */
 /*  Loader                                                                    */
@@ -114,7 +80,7 @@ export async function loader({ request }) {
   };
 
   try {
-    const products = await getAllProducts(admin);
+    const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
 
     // Build a flat list of images we need to measure (only for products that
     // have never been optimized — optimized products carry totals in their
@@ -123,8 +89,8 @@ export async function loader({ request }) {
     const measureTasks = [];
     for (const product of products) {
       if (parseSummary(product)) continue;
-      for (const edge of product.images.edges) {
-        measureTasks.push({ productId: product.id, url: edge.node.url });
+      for (const img of imageNodes(product)) {
+        measureTasks.push({ productId: product.id, url: img.image.url });
       }
     }
     const measuredSizes = await mapLimit(measureTasks, 24, t => headSizeMB(t.url));
@@ -134,12 +100,14 @@ export async function loader({ request }) {
     });
 
     const processedProducts = products.map((product) => {
-      const images = product.images.edges.map(e => e.node);
-      const imageCount = images.length;
-      const imagesWithAlt = images.filter(img => img.altText && img.altText.length > 10).length;
-
+      const images = imageNodes(product);
+      // The optimizer writes the summary on every batch, so a product without
+      // one has not been processed yet. Its totalImages is the full count —
+      // more accurate than the listing, which is capped at MAX_MEDIA_PER_PRODUCT.
       const summary = parseSummary(product);
-      let processed = summary ? (summary.optimizedImages || 0) : countProcessed(product);
+      const imageCount = Math.max(images.length, summary?.totalImages || 0);
+      const imagesWithAlt = images.filter(img => img.alt && img.alt.length > 10).length;
+      let processed = summary ? (summary.optimizedImages || 0) : 0;
       processed = Math.min(processed, imageCount);
 
       let totalOriginalSize;
@@ -171,7 +139,7 @@ export async function loader({ request }) {
         totalOptimizedSizeMB: totalOptimizedSize,
         sizeSavedMB,
         compressionRate,
-        featuredImageUrl: product.featuredImage?.url || images[0]?.url,
+        featuredImageUrl: product.featuredMedia?.preview?.image?.url || images[0]?.image.url,
         needsOptimization: score < 100,
       };
     });

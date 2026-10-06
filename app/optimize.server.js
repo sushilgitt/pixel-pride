@@ -108,9 +108,10 @@ export async function optimizeImage(imageUrl) {
   throw lastErr;
 }
 
-// Upload the optimized buffer via Shopify staged uploads, attach it to the
-// product, and delete the original. Returns the new MediaImage gid.
-export async function uploadAndReplaceImage(admin, productId, originalMediaId, optimizedBuffer, altText) {
+// Upload the optimized buffer via a Shopify staged upload and register it as a
+// new file (MediaImage). Returns the new MediaImage gid. The file is NOT yet on
+// the product — finalizeReplacements attaches it once Shopify has processed it.
+export async function uploadOptimizedImage(admin, optimizedBuffer, altText) {
   const isWebP = optimizedBuffer[8] === 0x57 && optimizedBuffer[9] === 0x45;
   const mimeType = isWebP ? "image/webp" : "image/jpeg";
   const filename = `pixelpride-${Date.now()}.${isWebP ? "webp" : "jpg"}`;
@@ -148,40 +149,182 @@ export async function uploadAndReplaceImage(admin, productId, originalMediaId, o
   const uploadRes = await timedFetch(target.url, { method: "POST", body: form }, 40000);
   if (!uploadRes.ok) throw new Error(`Staged upload HTTP ${uploadRes.status}`);
 
-  const mediaRes = await admin.graphql(
+  const fileRes = await admin.graphql(
     `#graphql
-      mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
-        productCreateMedia(productId: $productId, media: $media) {
-          media { ... on MediaImage { id } }
-          mediaUserErrors { field message }
+      mutation CreateOptimizedFile($files: [FileCreateInput!]!) {
+        fileCreate(files: $files) {
+          files { id }
+          userErrors { field message }
         }
       }`,
     {
       variables: {
-        productId,
-        media: [{ alt: altText, mediaContentType: "IMAGE", originalSource: target.resourceUrl }],
+        files: [{ alt: altText, contentType: "IMAGE", originalSource: target.resourceUrl, filename }],
       },
     }
   );
-  const mediaData = await mediaRes.json();
-  if (mediaData.data?.productCreateMedia?.mediaUserErrors?.length > 0) {
-    throw new Error(mediaData.data.productCreateMedia.mediaUserErrors[0].message);
-  }
-  const newMedia = mediaData.data?.productCreateMedia?.media?.[0];
-  if (!newMedia) throw new Error("Failed to attach media to product");
+  const fileData = await fileRes.json();
+  const fileErr = fileData.errors?.[0]?.message || fileData.data?.fileCreate?.userErrors?.[0]?.message;
+  if (fileErr) throw new Error(fileErr);
+  const newFile = fileData.data?.fileCreate?.files?.[0];
+  if (!newFile) throw new Error("Failed to create optimized file");
 
-  await admin.graphql(
+  return newFile.id;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Swapping originals for optimized copies without disturbing the product    */
+/* -------------------------------------------------------------------------- */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll until every new MediaImage leaves PROCESSING (or the timeout passes).
+// Returns { ready: Set<id>, failed: Set<id> }. Files must be READY before
+// fileUpdate can attach them to a product.
+async function waitForMediaReady(admin, ids, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let pending = [...ids];
+  const ready = new Set();
+  const failed = new Set();
+  while (pending.length > 0 && Date.now() < deadline) {
+    const res = await admin.graphql(
+      `#graphql
+        query MediaStatus($ids: [ID!]!) {
+          nodes(ids: $ids) { ... on MediaImage { id status } }
+        }`,
+      { variables: { ids: pending } }
+    );
+    const json = await res.json();
+    const nodes = json.data?.nodes || [];
+    pending = [];
+    for (const n of nodes) {
+      if (!n?.id) continue;
+      if (n.status === "READY") ready.add(n.id);
+      else if (n.status === "FAILED") failed.add(n.id);
+      else pending.push(n.id);
+    }
+    if (pending.length > 0) await sleep(1000);
+  }
+  // Still processing after the timeout: give up on those copies this round.
+  for (const id of pending) failed.add(id);
+  return { ready, failed };
+}
+
+// fileUpdate wrapper; returns the first error message, or null on success.
+async function updateFiles(admin, files) {
+  if (files.length === 0) return null;
+  const res = await admin.graphql(
     `#graphql
-      mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
-        productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
-          deletedMediaIds
-          mediaUserErrors { field message }
+      mutation UpdateFileRefs($files: [FileUpdateInput!]!) {
+        fileUpdate(files: $files) {
+          files { id }
+          userErrors { field message }
         }
       }`,
-    { variables: { productId, mediaIds: [originalMediaId] } }
+    { variables: { files } }
   );
+  const json = await res.json();
+  return json.errors?.[0]?.message || json.data?.fileUpdate?.userErrors?.[0]?.message || null;
+}
 
-  return newMedia.id;
+async function deleteFiles(admin, fileIds) {
+  if (fileIds.length === 0) return;
+  await admin.graphql(
+    `#graphql
+      mutation DeleteUnusedCopies($fileIds: [ID!]!) {
+        fileDelete(fileIds: $fileIds) { deletedFileIds }
+      }`,
+    { variables: { fileIds } }
+  );
+}
+
+// Replace each original with its optimized copy while keeping the product
+// exactly as the merchant arranged it:
+//   1. wait for Shopify to process the copies; discard any that fail (the
+//      original stays on the product untouched),
+//   2. attach the copies to the product,
+//   3. point variants that used an original at its copy,
+//   4. detach the originals from this product only — the original files stay
+//      in Content › Files (a backup, and still intact anywhere else they're used),
+//   5. move each copy into its original's position (restores order + featured image).
+// `replacements` is [{ oldId, newId }]; `mediaOrder` is every media id on the
+// product (images, videos, models) in its original order.
+// Returns the Set of oldIds whose replacement was abandoned.
+async function finalizeReplacements(admin, productId, replacements, mediaOrder) {
+  const abandoned = new Set();
+  if (replacements.length === 0) return abandoned;
+
+  const { failed } = await waitForMediaReady(admin, replacements.map((r) => r.newId));
+  let good = replacements.filter((r) => !failed.has(r.newId));
+  for (const r of replacements) if (failed.has(r.newId)) abandoned.add(r.oldId);
+
+  const attachErr = await updateFiles(admin, good.map((r) => ({ id: r.newId, referencesToAdd: [productId] })));
+  if (attachErr) {
+    // Couldn't attach the copies — leave the product exactly as it was.
+    console.error(`[OPTIMIZE] attach copies to ${productId}:`, attachErr);
+    for (const r of good) abandoned.add(r.oldId);
+    good = [];
+  }
+  await deleteFiles(admin, replacements.filter((r) => abandoned.has(r.oldId)).map((r) => r.newId));
+  if (good.length === 0) return abandoned;
+
+  // Variants whose image is being replaced. Budget: 1 + variants(2 + 100 × 4) ≈ 403.
+  const newIdFor = new Map(good.map((r) => [r.oldId, r.newId]));
+  const varRes = await admin.graphql(
+    `#graphql
+      query VariantMedia($id: ID!) {
+        product(id: $id) {
+          variants(first: 100) { nodes { id media(first: 1) { nodes { id } } } }
+        }
+      }`,
+    { variables: { id: productId } }
+  );
+  const varJson = await varRes.json();
+  const variantMedia = (varJson.data?.product?.variants?.nodes || [])
+    .map((v) => ({ variantId: v.id, oldId: v.media?.nodes?.[0]?.id }))
+    .filter((v) => v.oldId && newIdFor.has(v.oldId))
+    .map((v) => ({ variantId: v.variantId, mediaIds: [newIdFor.get(v.oldId)] }));
+  if (variantMedia.length > 0) {
+    const res = await admin.graphql(
+      `#graphql
+        mutation AttachVariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+          productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+            userErrors { field message }
+          }
+        }`,
+      { variables: { productId, variantMedia } }
+    );
+    const json = await res.json();
+    const err = json.errors?.[0]?.message || json.data?.productVariantAppendMedia?.userErrors?.[0]?.message;
+    if (err) console.error(`[OPTIMIZE] variant media for ${productId}:`, err);
+  }
+
+  const detachErr = await updateFiles(admin, good.map((r) => ({ id: r.oldId, referencesToRemove: [productId] })));
+  if (detachErr) console.error(`[OPTIMIZE] detach originals from ${productId}:`, detachErr);
+
+  // Copies were appended at the end; move each into its original's slot.
+  // Applying moves in ascending target order lands every copy correctly.
+  const moves = good
+    .map((r) => ({ id: r.newId, newPosition: mediaOrder.indexOf(r.oldId) }))
+    .filter((m) => m.newPosition >= 0)
+    .sort((a, b) => a.newPosition - b.newPosition)
+    .map((m) => ({ id: m.id, newPosition: String(m.newPosition) }));
+  if (moves.length > 0) {
+    const res = await admin.graphql(
+      `#graphql
+        mutation RestoreMediaOrder($id: ID!, $moves: [MoveInput!]!) {
+          productReorderMedia(id: $id, moves: $moves) {
+            mediaUserErrors { field message }
+          }
+        }`,
+      { variables: { id: productId, moves } }
+    );
+    const json = await res.json();
+    const err = json.errors?.[0]?.message || json.data?.productReorderMedia?.mediaUserErrors?.[0]?.message;
+    if (err) console.error(`[OPTIMIZE] reorder media for ${productId}:`, err);
+  }
+
+  return abandoned;
 }
 
 export async function generateAIAltText(imageUrl, productTitle) {
@@ -281,7 +424,7 @@ export async function optimizeBatch(admin, productId, opts = {}) {
           id
           title
           media(first: 250) {
-            edges { node { ... on MediaImage { id image { url altText } } } }
+            edges { node { id ... on MediaImage { image { url altText } } } }
           }
           metafields(first: 250, namespace: "image_optimization") {
             edges { node { key value } }
@@ -294,6 +437,8 @@ export async function optimizeBatch(admin, productId, opts = {}) {
   const product = data.data?.product;
   if (!product) return { success: false, error: "Product not found", productId };
 
+  // Every media id in display order — reorder positions count videos/models too.
+  const mediaOrder = (product.media?.edges || []).map(e => e.node?.id).filter(Boolean);
   const images = (product.media?.edges || [])
     .map(e => e.node)
     .filter(n => n && n.image && n.image.url)
@@ -338,7 +483,7 @@ export async function optimizeBatch(admin, productId, opts = {}) {
   const batch = pending.slice(0, cap);
 
   // Process this batch in parallel. Each result is a per-image metafield record.
-  const newRecords = (await mapLimit(batch, BATCH_CONCURRENCY, async (image) => {
+  const batchResults = (await mapLimit(batch, BATCH_CONCURRENCY, async (image) => {
     try {
       const opt = await optimizeImage(image.url);
 
@@ -359,10 +504,11 @@ export async function optimizeBatch(admin, productId, opts = {}) {
         altText = await generateAIAltText(image.url, product.title);
       }
 
-      const newId = await uploadAndReplaceImage(admin, productId, image.id, opt.optimizedBuffer, altText);
+      const newId = await uploadOptimizedImage(admin, opt.optimizedBuffer, altText);
       const key = `image_${newId.split("/").pop()}`;
       return {
         key,
+        replacement: { oldId: image.id, newId },
         record: {
           status: "optimized",
           originalSizeMB: opt.originalSizeMB,
@@ -380,6 +526,18 @@ export async function optimizeBatch(admin, productId, opts = {}) {
       return null; // failure — leave pending, don't write a metafield
     }
   })).filter(Boolean);
+
+  // Swap originals for copies in one pass, preserving order, featured image and
+  // variant images. Copies Shopify failed to process are dropped (originals kept).
+  let abandoned = new Set();
+  try {
+    abandoned = await finalizeReplacements(
+      admin, productId, batchResults.filter(r => r.replacement).map(r => r.replacement), mediaOrder
+    );
+  } catch (err) {
+    console.error(`[OPTIMIZE] finalize ${productId}:`, err?.message || err);
+  }
+  const newRecords = batchResults.filter(r => !(r.replacement && abandoned.has(r.replacement.oldId)));
 
   // Persist the per-image metafields written this batch (up to 25 per call).
   if (newRecords.length > 0) {

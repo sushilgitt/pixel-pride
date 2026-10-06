@@ -6,6 +6,7 @@ import { authenticate } from '../shopify.server';
 import { getBillingStateCached } from '../billing.server';
 import { entitled } from '../plans.server';
 import { setDefaultResultOrder } from 'node:dns';
+import { fetchAllProducts, imageNodes, MAX_MEDIA_PER_PRODUCT } from '../catalog.server';
 
 // AI alt text is a Starter+ feature. Returns whether the shop's plan includes it;
 // lets a re-auth Response propagate, treats other failures as not-entitled.
@@ -96,30 +97,22 @@ async function verifyOpenAIKey() {
 }
 
 // Safety cap so a pathologically large catalog can't make the loader run
-// forever. 200 pages x 50 products = up to 10,000 products.
-const MAX_PRODUCT_PAGES = 200;
+// forever. 1,000 pages x 10 products = up to 10,000 products.
+const MAX_PRODUCT_PAGES = 1000;
 
+// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// 1 + featuredMedia 3 + media(2 + 40×2) = 86, × 10 products ≈ 862. A caption is
+// written to a product's first MAX_MEDIA_PER_PRODUCT images.
 const PRODUCTS_QUERY = `#graphql
-  query GetProductsWithImages($cursor: String) {
-    products(first: 50, after: $cursor) {
+  query AltWriterProducts($cursor: String) {
+    products(first: 10, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id
-          title
-          featuredImage { url altText }
-          media(first: 250) {
-            edges {
-              node {
-                mediaContentType
-                ... on MediaImage {
-                  id
-                  alt
-                  image { url }
-                }
-              }
-            }
-          }
+      nodes {
+        id
+        title
+        featuredMedia { preview { image { url } } }
+        media(first: ${MAX_MEDIA_PER_PRODUCT}) {
+          nodes { ... on MediaImage { id alt image { url } } }
         }
       }
     }
@@ -132,51 +125,35 @@ export async function loader({ request }) {
   if (!(await altTextAllowed(admin, session.shop))) throw redirect('/app');
 
   try {
-    // Page through the whole catalog (metadata only, so this stays fast).
     // Alt text is generated ONCE per product (from its main image) and applied
     // to ALL of that product's images, so each row here is a PRODUCT, carrying
     // every image id so a single caption can be written to all of them.
+    const { products, truncated } = await fetchAllProducts(admin, PRODUCTS_QUERY, { maxPages: MAX_PRODUCT_PAGES });
     const rows = [];
-    let cursor = null;
-    let hasNextPage = true;
-    let pages = 0;
-    let truncated = false;
 
-    while (hasNextPage) {
-      if (pages >= MAX_PRODUCT_PAGES) { truncated = true; break; }
-      const response = await admin.graphql(PRODUCTS_QUERY, { variables: { cursor } });
-      const data = await response.json();
-      const conn = data.data.products;
+    for (const product of products) {
+      const productImages = imageNodes(product)
+        .map(n => ({ id: n.id, url: n.image.url, alt: n.alt || '' }));
+      if (productImages.length === 0) continue; // nothing to caption
 
-      conn.edges.forEach(({ node: product }) => {
-        const productImages = product.media.edges
-          .map(e => e.node)
-          .filter(n => n && n.mediaContentType === 'IMAGE' && n.image?.url)
-          .map(n => ({ id: n.id, url: n.image.url, alt: n.alt || '' }));
-        if (productImages.length === 0) return; // nothing to caption
+      // Use the merchandising "main" image for the thumbnail + AI input,
+      // falling back to the first media image.
+      const featuredUrl = product.featuredMedia?.preview?.image?.url;
+      const main = productImages.find(i => i.url === featuredUrl) || productImages[0];
+      const currentAlt = main.alt || '';
 
-        // Use the merchandising "main" image for the thumbnail + AI input,
-        // falling back to the first media image.
-        const main = productImages.find(i => i.url === product.featuredImage?.url) || productImages[0];
-        const currentAlt = product.featuredImage?.altText || main.alt || '';
-
-        rows.push({
-          id: product.id,                       // row id = product id
-          productId: product.id,
-          productTitle: product.title,
-          url: main.url,                        // main image (thumbnail + AI)
-          imageIds: productImages.map(i => i.id), // apply caption to ALL of these
-          imageCount: productImages.length,
-          currentAlt,
-          suggestedAlt: '',
-          seoScore: calculateSeoScore(currentAlt),
-          status: 'pending'
-        });
+      rows.push({
+        id: product.id,                       // row id = product id
+        productId: product.id,
+        productTitle: product.title,
+        url: main.url,                        // main image (thumbnail + AI)
+        imageIds: productImages.map(i => i.id), // apply caption to ALL of these
+        imageCount: productImages.length,
+        currentAlt,
+        suggestedAlt: '',
+        seoScore: calculateSeoScore(currentAlt),
+        status: 'pending'
       });
-
-      hasNextPage = conn.pageInfo.hasNextPage;
-      cursor = conn.pageInfo.endCursor;
-      pages += 1;
     }
 
     return { images: rows, truncated };
@@ -282,8 +259,8 @@ export async function action({ request }) {
             console.error(`AI alt text failed for image ${image.id} via ${aiProvider}: ${error.message}`);
             return {
               id: image.id,
-              suggestedAlt: generateSmartFallback(image.productTitle, image.url),
-              seoScore: 70,
+              suggestedAlt: generateSmartFallback(image.productTitle),
+              seoScore: calculateSeoScore(generateSmartFallback(image.productTitle)),
               usedFallback: true,
               aiError: error.message
             };
@@ -322,7 +299,7 @@ async function generateAIAltText(imageUrl, productTitle, provider = 'openai') {
     case 'anthropic':
       return await generateWithAnthropic(imageUrl, productTitle);
     default:
-      return generateSmartFallbackObject(productTitle, imageUrl);
+      return generateSmartFallbackObject(productTitle);
   }
 }
 
@@ -445,35 +422,17 @@ Return ONLY the alt text, nothing else.`
   return { altText, seoScore: calculateSeoScore(altText) };
 }
 
-function generateSmartFallback(productTitle, imageUrl) {
-  const titleWords = productTitle.toLowerCase();
-  const urlLower = imageUrl.toLowerCase();
-  const colors = ['black', 'white', 'red', 'blue', 'green', 'yellow', 'purple', 'pink', 'orange', 'brown', 'gray', 'grey', 'navy', 'beige', 'tan'];
-  let detectedColor = colors.find(color => titleWords.includes(color) || urlLower.includes(color));
-  let description = '';
-
-  if (titleWords.match(/\b(shirt|tee|t-shirt|blouse|top)\b/)) {
-    description = `casual ${detectedColor || ''} cotton fabric`.trim();
-  } else if (titleWords.match(/\b(shoe|shoes|sneaker|sneakers|boot|boots)\b/)) {
-    description = `comfortable ${detectedColor || 'quality'} footwear with durable construction`.trim();
-  } else if (titleWords.match(/\b(watch|watches)\b/)) {
-    description = `elegant ${detectedColor || 'premium'} timepiece with precision design`.trim();
-  } else if (titleWords.match(/\b(bag|bags|backpack|purse|handbag)\b/)) {
-    description = `durable ${detectedColor || 'quality'} bag with spacious storage`.trim();
-  } else {
-    description = `${detectedColor || 'quality'} product with professional design`.trim();
-  }
-
-  let altText = `${productTitle} - ${description}`;
-  if (altText.length > 125) altText = altText.substring(0, 122) + '...';
-  return altText;
+// Used only when the AI provider fails. Returns the product title alone — a
+// factual caption — rather than inventing attributes (material, colour, quality)
+// the product may not have. Rows using it are flagged `usedFallback` in the UI.
+function generateSmartFallback(productTitle) {
+  const altText = String(productTitle || "").trim();
+  return altText.length > 125 ? altText.substring(0, 122) + "..." : altText;
 }
 
-function generateSmartFallbackObject(productTitle, imageUrl) {
-  return {
-    altText: generateSmartFallback(productTitle, imageUrl),
-    seoScore: calculateSeoScore(generateSmartFallback(productTitle, imageUrl))
-  };
+function generateSmartFallbackObject(productTitle) {
+  const altText = generateSmartFallback(productTitle);
+  return { altText, seoScore: calculateSeoScore(altText) };
 }
 
 export default function AltTextSuggestions() {

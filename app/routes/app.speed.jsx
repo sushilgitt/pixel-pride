@@ -5,6 +5,7 @@ import { useLoaderData, useSubmit, useNavigation, useActionData, redirect } from
 import { authenticate } from '../shopify.server';
 import { getBillingStateCached } from '../billing.server';
 import { entitled } from '../plans.server';
+import { fetchAllProducts, parseSummary } from '../catalog.server';
 
 // Page Speed reports are a Growth+ feature. Resolve the shop's plan and return
 // its entitlement; lets a Response (re-auth) propagate, treats any other failure
@@ -33,56 +34,22 @@ import {
   Button
 } from '@shopify/polaris';
 
-/**
- * Fetch all products from Shopify with optimization data
- */
-async function getAllProductHandles(admin) {
-  const query = `#graphql
-    query GetProducts($cursor: String) {
-      products(first: 250, after: $cursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        edges {
-          node {
-            id
-            title
-            handle
-            onlineStoreUrl
-            metafields(first: 10, namespace: "image_optimization") {
-              edges {
-                node {
-                  key
-                  value
-                }
-              }
-            }
-          }
-        }
+// Budget (Shopify caps a query at 1,000 requested points): per product ≈
+// 1 + summary 1 = 2, × 100 products ≈ 202.
+const PRODUCTS_QUERY = `#graphql
+  query SpeedLabProducts($cursor: String) {
+    products(first: 100, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        title
+        handle
+        onlineStoreUrl
+        summary: metafield(namespace: "image_optimization", key: "optimization_summary") { value }
       }
     }
-  `;
-
-  let allProducts = [];
-  let hasNextPage = true;
-  let cursor = null;
-
-  while (hasNextPage) {
-    const response = await admin.graphql(query, {
-      variables: { cursor }
-    });
-
-    const data = await response.json();
-    const products = data.data.products.edges.map(edge => edge.node);
-    allProducts = [...allProducts, ...products];
-
-    hasNextPage = data.data.products.pageInfo.hasNextPage;
-    cursor = data.data.products.pageInfo.endCursor;
   }
-
-  return allProducts;
-}
+`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -175,29 +142,15 @@ async function runPageSpeedTest(url) {
  * (written by the optimizer after actual compression runs).
  */
 function getOptimizationData(product) {
-  const metafields = product.metafields?.edges || [];
-  const optimizationSummary = metafields.find(
-    mf => mf.node.key === 'optimization_summary'
-  );
-
-  if (!optimizationSummary) {
-    return null;
-  }
-
-  try {
-    const data = JSON.parse(optimizationSummary.node.value);
-
-    return {
-      totalSizeSavedMB: parseFloat((data.totalSizeSavedMB || 0).toFixed(2)),
-      totalOriginalSizeMB: parseFloat((data.totalOriginalSizeMB || 0).toFixed(2)),
-      totalOptimizedSizeMB: parseFloat((data.totalOptimizedSizeMB || 0).toFixed(2)),
-      compressionRate: data.avgCompressionRate || 0,
-      optimizedImages: data.optimizedImages || 0
-    };
-  } catch (e) {
-    console.error('Error parsing optimization summary:', e);
-    return null;
-  }
+  const data = parseSummary(product);
+  if (!data) return null;
+  return {
+    totalSizeSavedMB: parseFloat((data.totalSizeSavedMB || 0).toFixed(2)),
+    totalOriginalSizeMB: parseFloat((data.totalOriginalSizeMB || 0).toFixed(2)),
+    totalOptimizedSizeMB: parseFloat((data.totalOptimizedSizeMB || 0).toFixed(2)),
+    compressionRate: data.avgCompressionRate || 0,
+    optimizedImages: data.optimizedImages || 0
+  };
 }
 
 export async function loader({ request }) {
@@ -209,7 +162,7 @@ export async function loader({ request }) {
   const selectedPage = url.searchParams.get('page') || 'all';
 
   try {
-    const products = await getAllProductHandles(admin);
+    const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
 
     const shop = session.shop;
     // Use the full myshopify domain — stripping ".myshopify.com" produced an
