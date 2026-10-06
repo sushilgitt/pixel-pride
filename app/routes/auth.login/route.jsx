@@ -19,8 +19,8 @@ export default function Auth() {
       <s-page>
         <s-section heading="Open Pixel Pride from Shopify">
           <s-paragraph>
-            Pixel Pride runs inside your Shopify admin. Install it from the Shopify App Store, or
-            open it from Apps in your Shopify admin to sign in.
+            Pixel Pride lives inside your Shopify admin. Get it from the Shopify App Store, or
+            open it from Apps in your Shopify admin to continue.
           </s-paragraph>
         </s-section>
       </s-page>

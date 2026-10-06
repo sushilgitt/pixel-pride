@@ -327,7 +327,7 @@ export async function action({ request }) {
   // Tier boundary: block report runs for non-entitled plans (defends the action
   // even if the UI were bypassed).
   if (!(await pageSpeedAllowed(admin, session.shop))) {
-    return { error: 'Page Speed reports are available on the Growth plan and above.' };
+    return { error: 'Speed Lab is included with Growth and Pro.' };
   }
   const formData = await request.formData();
   const actionType = formData.get('actionType');
@@ -474,7 +474,7 @@ export default function PageSpeedImpactReports() {
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={GaugeIcon} eyebrow="Performance" title="Page Speed Reports" subtitle="Measured image savings & live Core Web Vitals testing" />
+          <PageHeader icon={GaugeIcon} eyebrow="Speed Lab" title="Storefront speed" subtitle="Real weight removed per page, plus on-demand Lighthouse tests" />
         </Layout.Section>
         {loadError && (
           <Layout.Section>
@@ -511,7 +511,7 @@ export default function PageSpeedImpactReports() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h3">Live PageSpeed Test</Text>
+              <Text variant="headingMd" as="h3">Run a Lighthouse test</Text>
               <Text variant="bodyMd" as="p">
                 Run a real Lighthouse test via Google PageSpeed Insights to measure the current performance of a product page.
                 This is actual measured data for your store, not an estimate.
@@ -520,7 +520,7 @@ export default function PageSpeedImpactReports() {
                 <InlineStack gap="400" blockAlign="end" wrap={true}>
                   <Box minWidth="300px">
                     <Select
-                      label="Select Page"
+                      label="Product page"
                       options={pageOptions}
                       value={selectedPage}
                       onChange={handlePageChange}
@@ -532,7 +532,7 @@ export default function PageSpeedImpactReports() {
                     loading={isRunningAnalysis}
                     disabled={isRunningAnalysis || !selectedPage}
                   >
-                    {isRunningAnalysis ? 'Running test…' : 'Run Live PageSpeed Test'}
+                    {isRunningAnalysis ? 'Running test…' : 'Start test'}
                   </Button>
                 </InlineStack>
               ) : (
@@ -580,7 +580,7 @@ export default function PageSpeedImpactReports() {
             <Card>
               <BlockStack gap="400">
                 <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="headingMd" as="h3">Measured Image Savings by Page</Text>
+                  <Text variant="headingMd" as="h3">Weight removed, page by page</Text>
                   {pages.length > 20 && (
                     <Badge tone="info">Showing first 20 of {pages.length} pages</Badge>
                   )}
@@ -602,7 +602,7 @@ export default function PageSpeedImpactReports() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingMd" as="h3">Performance Insights & Recommendations</Text>
+              <Text variant="headingMd" as="h3">What to do next</Text>
               {insights.map((insight) => (
                 <Banner key={insight.id} tone={getInsightTone(insight.type)}>
                   <BlockStack gap="200">

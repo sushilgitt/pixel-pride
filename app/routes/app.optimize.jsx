@@ -8,6 +8,7 @@ import { getUsage, getRemaining } from '../usage.server';
 import { entitled } from '../plans.server';
 import db from '../db.server';
 import { mapLimit, headSizeMB, optimizeBatch } from '../optimize.server';
+import { PixelMeter } from '../components/Pixels';
 import {
   Page,
   Layout,
@@ -18,7 +19,6 @@ import {
   Box,
   Thumbnail,
   Banner,
-  ProgressBar,
   Select,
   EmptyState
 } from '@shopify/polaris';
@@ -226,7 +226,7 @@ export async function action({ request }) {
       try {
         const { plan } = await getBillingStateCached(admin, session.shop);
         if (!entitled(plan, 'autoOptimize')) {
-          return { success: false, settingUpdated: true, error: 'Upgrade to Growth to auto-optimize new products.' };
+          return { success: false, settingUpdated: true, error: 'Autopilot is included with Growth and Pro.' };
         }
       } catch { /* if billing check fails, fall through and block enabling */
         return { success: false, settingUpdated: true, error: 'Could not verify your plan. Try again.' };
@@ -332,7 +332,7 @@ export default function ProductOptimization() {
 
     // Monthly quota hit — stop the whole queue and prompt to upgrade.
     if (data.quotaExceeded) {
-      setError('Monthly image quota reached. Upgrade your plan to optimize more images this month.');
+      setError('You have used this month’s compression credits. Upgrade your plan to keep going.');
       queueRef.current = [];
       startNext();
       return;
@@ -434,16 +434,16 @@ export default function ProductOptimization() {
   };
 
   const filterOptions = [
-    { label: 'All Products', value: 'all' },
-    { label: 'Needs Optimization', value: 'needs_optimization' },
-    { label: 'Optimized', value: 'optimized' },
-    { label: 'No Alt Text', value: 'no_alt_text' },
+    { label: 'All', value: 'all' },
+    { label: 'To do', value: 'needs_optimization' },
+    { label: 'Done', value: 'optimized' },
+    { label: 'Missing alt', value: 'no_alt_text' },
   ];
   const sortOptions = [
-    { label: 'Score: Low to High', value: 'score_asc' },
-    { label: 'Score: High to Low', value: 'score_desc' },
-    { label: 'Size: Largest First', value: 'size_desc' },
-    { label: 'Most Images First', value: 'images_desc' },
+    { label: 'Least compressed', value: 'score_asc' },
+    { label: 'Most compressed', value: 'score_desc' },
+    { label: 'Heaviest first', value: 'size_desc' },
+    { label: 'Most photos first', value: 'images_desc' },
   ];
 
   // Merge loader values with any live progress for a product.
@@ -476,17 +476,17 @@ export default function ProductOptimization() {
   const allSelected = selectedProducts.length === displayedProducts.length && displayedProducts.length > 0;
 
   const kpis = [
-    { label: 'Products', value: stats.total.toLocaleString() },
-    { label: 'Need work', value: stats.needsOptimization.toLocaleString(), tone: stats.needsOptimization > 0 ? 'warn' : undefined },
-    { label: 'Images', value: stats.totalImages.toLocaleString() },
-    { label: 'Saved so far', value: formatBytes(liveSavings), tone: 'good' },
+    { label: 'Products in catalog', value: stats.total.toLocaleString() },
+    { label: 'Waiting to compress', value: stats.needsOptimization.toLocaleString(), tone: stats.needsOptimization > 0 ? 'warn' : undefined },
+    { label: 'Product photos', value: stats.totalImages.toLocaleString() },
+    { label: 'Weight removed', value: formatBytes(liveSavings), tone: 'good' },
   ];
 
   return (
     <Page>
       <Layout>
         <Layout.Section>
-          <PageHeader icon={ImageMagicIcon} eyebrow="Optimize" title="Image Optimizer" subtitle="WebP conversion & smart compression — optimized images replace the originals" />
+          <PageHeader icon={ImageMagicIcon} eyebrow="Compress" title="Image compression" subtitle="Turn heavy product photos into lean WebP files, swapped in place on each product" />
         </Layout.Section>
 
         {error && (
@@ -502,11 +502,11 @@ export default function ProductOptimization() {
 
         {/* KPI strip */}
         <Layout.Section>
-          <div className="ir-kpis">
+          <div className="pp-kpis">
             {kpis.map(k => (
-              <div key={k.label} className="ir-kpi">
-                <p className={`ir-kpi-value${k.tone ? ` ir-kpi-${k.tone}` : ''}`}>{k.value}</p>
-                <p className="ir-kpi-label">{k.label}</p>
+              <div key={k.label} className="pp-kpi">
+                <p className={`pp-kpi-value${k.tone ? ` pp-kpi-${k.tone}` : ''}`}>{k.value}</p>
+                <p className="pp-kpi-label">{k.label}</p>
               </div>
             ))}
           </div>
@@ -514,40 +514,40 @@ export default function ProductOptimization() {
 
         {/* Sidebar: usage + automation */}
         <Layout.Section variant="oneThird">
-          <div className="ir-side-card">
-            <div className="ir-side-block">
-              <div className="ir-side-row">
-                <span className="ir-side-title">Monthly usage</span>
+          <div className="pp-side-card">
+            <div className="pp-side-block">
+              <div className="pp-side-row">
+                <span className="pp-side-title">Credits this month</span>
                 <Badge tone={plan?.tier === 'free' ? undefined : 'success'}>{`${plan?.name || 'Free'} plan`}</Badge>
               </div>
-              <p className="ir-side-big">
+              <p className="pp-side-big">
                 {usedImages.toLocaleString()}
                 <span>{` / ${quota.toLocaleString()}`}</span>
               </p>
-              <ProgressBar progress={usagePct} size="small" tone={quotaReached ? 'critical' : 'primary'} />
+              <PixelMeter pct={usagePct} light label={`${usagePct}% of monthly credits used`} />
               {quotaReached && (
                 <Text variant="bodySm" as="p" tone="critical">
-                  Monthly quota used. Upgrade your plan to optimize more images.
+                  You have used this month's credits. Upgrade for more.
                 </Text>
               )}
             </div>
-            <div className="ir-side-block">
-              <div className="ir-side-row">
-                <span className="ir-side-title">Auto-optimize</span>
+            <div className="pp-side-block">
+              <div className="pp-side-row">
+                <span className="pp-side-title">Autopilot</span>
                 {plan?.autoOptimizeAllowed
                   ? <Badge tone={autoOptimize ? 'success' : undefined}>{autoOptimize ? 'On' : 'Off'}</Badge>
-                  : <Badge tone="attention">Growth & up</Badge>}
+                  : <Badge tone="attention">Growth+</Badge>}
               </div>
-              <p className="ir-side-note">Optimize images on every new product automatically, in the background.</p>
+              <p className="pp-side-note">Compress photos on every new product automatically, in the background.</p>
               {plan?.autoOptimizeAllowed ? (
                 <Checkbox
-                  label="Enable for new products"
+                  label="Run Autopilot on new products"
                   checked={autoOptimize}
                   onChange={handleToggleAutoOptimize}
                   disabled={settingsFetcher.state !== 'idle'}
                 />
               ) : (
-                <Text variant="bodySm" as="p" tone="subdued">Available on the Growth plan and above.</Text>
+                <Text variant="bodySm" as="p" tone="subdued">Included with Growth and Pro.</Text>
               )}
             </div>
           </div>
@@ -555,21 +555,21 @@ export default function ProductOptimization() {
 
         {/* Product list */}
         <Layout.Section>
-          <div className="ir-list">
-            <div className="ir-toolbar">
-              <div className="ir-pills" role="tablist" aria-label="Filter products">
+          <div className="pp-list">
+            <div className="pp-toolbar">
+              <div className="pp-tabs" role="tablist" aria-label="Filter products">
                 {filterOptions.map(o => (
                   <button
                     key={o.value}
                     type="button"
                     role="tab"
                     aria-selected={filter === o.value}
-                    className={`ir-pill${filter === o.value ? ' is-active' : ''}`}
+                    className={`pp-tab${filter === o.value ? ' is-active' : ''}`}
                     onClick={() => handleFilterChange(o.value)}
                     disabled={isBusy}
                   >
                     {o.label}
-                    <span className="ir-pill-count">{filterCounts[o.value]}</span>
+                    <span className="pp-tab-count">{filterCounts[o.value]}</span>
                   </button>
                 ))}
               </div>
@@ -578,7 +578,7 @@ export default function ProductOptimization() {
               </Box>
             </div>
 
-            <div className="ir-row ir-row-head">
+            <div className="pp-row pp-row-head">
               <Checkbox
                 label="Select all"
                 labelHidden
@@ -588,15 +588,15 @@ export default function ProductOptimization() {
               />
               <span />
               <span>Product</span>
-              <span>Optimized</span>
-              <span>Saved</span>
-              <span>Score</span>
+              <span>Progress</span>
+              <span>Removed</span>
+              <span>Done</span>
               <span />
             </div>
 
             {displayedProducts.length === 0 ? (
-              <EmptyState heading="No products found" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png">
-                <p>Try a different filter to see products.</p>
+              <EmptyState heading="Nothing here yet" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png">
+                <p>No products match this view. Try another tab.</p>
               </EmptyState>
             ) : (
               displayedProducts.map((raw) => {
@@ -605,7 +605,7 @@ export default function ProductOptimization() {
                 const selected = selectedProducts.includes(product.id);
                 const scoreTone = product.score >= 80 ? 'good' : product.score >= 60 ? 'warn' : 'bad';
                 return (
-                  <div key={product.id} className={`ir-row${selected ? ' is-selected' : ''}${isActive ? ' is-active' : ''}`}>
+                  <div key={product.id} className={`pp-row${selected ? ' is-selected' : ''}${isActive ? ' is-active' : ''}`}>
                     <Checkbox
                       label={`Select ${product.title}`}
                       labelHidden
@@ -614,31 +614,31 @@ export default function ProductOptimization() {
                       disabled={isBusy}
                     />
                     <Thumbnail source={product.featuredImageUrl || ImageMagicIcon} alt={product.title} size="small" />
-                    <div className="ir-row-main">
-                      <p className="ir-row-title">{product.title}</p>
-                      <p className="ir-row-meta">
+                    <div className="pp-row-main">
+                      <p className="pp-row-title">{product.title}</p>
+                      <p className="pp-row-meta">
                         {`${product.status.toLowerCase()} · ${product.imageCount} images · alt text ${product.imagesWithAlt}/${product.imageCount}`}
-                        {isActive && <span className="ir-live-dot">Optimizing</span>}
+                        {isActive && <span className="pp-live">Compressing</span>}
                       </p>
                     </div>
-                    <div className="ir-row-progress">
+                    <div className="pp-row-progress">
                       <span>{`${product.optimizedImages}/${product.imageCount}`}</span>
-                      <div className="ir-bar"><i style={{ width: `${product.score}%` }} /></div>
+                      <div className="pp-bar"><i style={{ width: `${product.score}%` }} /></div>
                     </div>
-                    <div className="ir-row-saved">
+                    <div className="pp-row-saved">
                       <strong>{formatBytes(product.sizeSavedMB)}</strong>
                       <span>{`of ${formatBytes(product.totalOriginalSizeMB)}`}</span>
                     </div>
-                    <div className={`ir-score ir-score-${scoreTone}`} style={{ '--pct': product.score }}>
-                      <span>{product.score}</span>
+                    <div className={`pp-score pp-score-${scoreTone}`}>
+                      {`${product.score}%`}
                     </div>
-                    <div className="ir-row-action">
+                    <div className="pp-row-action">
                       {product.needsOptimization ? (
                         <Button size="slim" variant="primary" onClick={() => handleOptimizeProduct(product.id)} loading={isActive} disabled={isBusy || quotaReached}>
-                          Optimize
+                          Compress
                         </Button>
                       ) : (
-                        <Badge tone="success">Done</Badge>
+                        <Badge tone="success">Compressed</Badge>
                       )}
                     </div>
                   </div>
@@ -650,12 +650,12 @@ export default function ProductOptimization() {
       </Layout>
 
       {selectedProducts.length > 0 && (
-        <div className="ir-bulkbar" role="region" aria-label="Bulk actions">
+        <div className="pp-bulkbar" role="region" aria-label="Bulk actions">
           <span>{`${selectedProducts.length} product${selectedProducts.length === 1 ? '' : 's'} selected`}</span>
-          <div className="ir-bulkbar-actions">
-            <button type="button" className="ir-btn ir-btn-ghost" onClick={() => setSelectedProducts([])} disabled={isBusy}>Clear</button>
-            <button type="button" className="ir-btn ir-btn-lime" onClick={handleOptimizeSelected} disabled={isBusy || quotaReached}>
-              {isBusy ? 'Optimizing…' : 'Optimize selected'}
+          <div className="pp-bulkbar-actions">
+            <button type="button" className="pp-btn pp-btn-glass" onClick={() => setSelectedProducts([])} disabled={isBusy}>Clear</button>
+            <button type="button" className="pp-btn pp-btn-white" onClick={handleOptimizeSelected} disabled={isBusy || quotaReached}>
+              {isBusy ? 'Compressing…' : 'Compress selected'}
             </button>
           </div>
         </div>

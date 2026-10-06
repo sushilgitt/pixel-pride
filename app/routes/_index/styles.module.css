@@ -6,12 +6,12 @@
   justify-content: center;
   padding: 48px 20px;
   box-sizing: border-box;
-  color: #fff;
-  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  color: #1C1530;
+  font-family: "DM Sans", system-ui, sans-serif;
   background:
-    radial-gradient(700px 360px at 90% -10%, rgba(34, 211, 238, 0.25), transparent 60%),
-    radial-gradient(700px 360px at 0% 110%, rgba(13, 148, 136, 0.3), transparent 60%),
-    #0B1530;
+    radial-gradient(680px 320px at 100% 0%, rgba(168, 85, 247, 0.16), transparent 65%),
+    radial-gradient(620px 300px at 0% 100%, rgba(255, 107, 87, 0.14), transparent 65%),
+    #FBF8F4;
 }
 
 .content {
@@ -24,21 +24,41 @@
 
 .eyebrow {
   margin: 0;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font: 600 13px/1 "Sora", sans-serif;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #BEF264;
+  color: #7C3AED;
 }
+
+.mark {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 7px);
+  grid-template-rows: repeat(2, 7px);
+  gap: 2px;
+}
+.mark i { display: block; border-radius: 2px; }
+.mark i:nth-child(1) { background: #7C3AED; }
+.mark i:nth-child(2) { background: #FF6B57; }
+.mark i:nth-child(3) { background: #FFB547; grid-column: 2; }
 
 .heading {
   margin: 0;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: clamp(36px, 6vw, 56px);
+  font-family: "Sora", sans-serif;
+  font-size: clamp(34px, 6vw, 56px);
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   line-height: 1.05;
+}
+.heading em {
+  font-style: normal;
+  background: linear-gradient(120deg, #7C3AED 0%, #A855F7 55%, #FF6B57 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .text {
@@ -46,57 +66,7 @@
   max-width: 560px;
   font-size: 16px;
   line-height: 1.6;
-  color: #9FB3C8;
-}
-
-.form {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 0 auto;
-}
-
-.label {
-  display: grid;
-  gap: 6px;
-  text-align: left;
-  font-size: 13px;
-  color: #DCE6F2;
-}
-
-.label span:last-child {
-  font-size: 12px;
-  color: #7D90A8;
-}
-
-.input {
-  width: 300px;
-  max-width: 80vw;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
-  font: inherit;
-}
-
-.input:focus {
-  outline: none;
-  border-color: #5EEAD4;
-  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.35);
-}
-
-.button {
-  padding: 12px 22px;
-  border: 0;
-  border-radius: 10px;
-  background: #BEF264;
-  color: #0B1530;
-  font: 700 14px/1 "Plus Jakarta Sans", sans-serif;
-  cursor: pointer;
-  margin-bottom: 22px;
+  color: #6B6478;
 }
 
 .list {
@@ -111,20 +81,20 @@
 .list > li {
   text-align: left;
   padding: 18px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid #ECE6DD;
   font-size: 14px;
   line-height: 1.55;
-  color: #9FB3C8;
+  color: #6B6478;
 }
 
 .list > li strong {
   display: block;
   margin-bottom: 4px;
-  font-family: "Space Grotesk", sans-serif;
+  font-family: "Sora", sans-serif;
   font-size: 16px;
-  color: #fff;
+  color: #1C1530;
 }
 
 @media only screen and (max-width: 50rem) {
@@ -136,9 +106,9 @@
 .note {
   margin: 0 auto;
   padding: 12px 18px;
-  border-radius: 10px;
-  background: rgba(190, 242, 100, 0.1);
-  border: 1px solid rgba(190, 242, 100, 0.35);
-  color: #DCE6F2;
+  border-radius: 999px;
+  background: #F3EEFF;
+  color: #5B21B6;
   font-size: 14px;
+  font-weight: 500;
 }

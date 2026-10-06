@@ -86,15 +86,15 @@ export default function App() {
         {hasActivePlan ? (
           <>
             <ui-nav-menu>
-              <a href="/app" rel="home">Home</a>
-              <a href="/app/productoptimization">Image Optimization</a>
+              <a href="/app" rel="home">Overview</a>
+              <a href="/app/optimize">Compress</a>
               {features?.altText && (
-                <a href="/app/alttextsuggestions">Alt Text Generator</a>
+                <a href="/app/alt-text">Alt Writer</a>
               )}
               {features?.pageSpeed && (
-                <a href="/app/pagespeedimpactreports">Page Speed Reports</a>
+                <a href="/app/speed">Speed Lab</a>
               )}
-              <a href="/app/billing">Billing</a>
+              <a href="/app/plan">Plan</a>
             </ui-nav-menu>
             <Outlet />
           </>

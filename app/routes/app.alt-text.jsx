@@ -190,7 +190,7 @@ export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   // Tier boundary: block alt-text generation for non-entitled (Free) plans.
   if (!(await altTextAllowed(admin, session.shop))) {
-    return { error: 'AI alt text is available on the Starter plan and above.' };
+    return { error: 'Alt Writer is included with Starter and above.' };
   }
   const formData = await request.formData();
   const actionType = formData.get('actionType');
@@ -689,7 +689,7 @@ export default function AltTextSuggestions() {
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={MagicIcon} eyebrow="AI SEO" title="AI Alt Text Generator" subtitle="Powered by OpenAI GPT-4o-mini — one caption per product" />
+          <PageHeader icon={MagicIcon} eyebrow="Alt Writer" title="AI alt text" subtitle="AI reads each product's main photo and writes one caption for all of its images" />
         </Layout.Section>
         {error && (
           <Layout.Section>
@@ -726,11 +726,11 @@ export default function AltTextSuggestions() {
                     <Text variant="heading2xl" as="h2">{productCount}</Text>
                   </BlockStack>
                   <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Total Images</Text>
+                    <Text variant="bodySm" as="p" tone="subdued">Photos</Text>
                     <Text variant="heading2xl" as="h2">{totalImages}</Text>
                   </BlockStack>
                   <BlockStack gap="200">
-                    <Text variant="bodySm" as="p" tone="subdued">Pending</Text>
+                    <Text variant="bodySm" as="p" tone="subdued">To review</Text>
                     <Text variant="heading2xl" as="h2">{pendingCount}</Text>
                   </BlockStack>
                   <BlockStack gap="200">
@@ -749,8 +749,8 @@ export default function AltTextSuggestions() {
                   </Box>
                   <Button onClick={generateSuggestions} loading={isGenerating} disabled={isGenerating}>
                     {isGenerating
-                      ? `Analyzing ${genProgress.done}/${genProgress.total}...`
-                      : 'Generate AI Suggestions'}
+                      ? `Writing ${genProgress.done}/${genProgress.total}…`
+                      : 'Write suggestions'}
                   </Button>
                   {selectedImages.length > 0 && (
                     <Button
@@ -759,7 +759,7 @@ export default function AltTextSuggestions() {
                       loading={isSubmitting && !isGenerating}
                       disabled={isSubmitting}
                     >
-                      Apply Selected ({selectedImages.length})
+                      Apply to {selectedImages.length} selected
                     </Button>
                   )}
                 </InlineStack>
@@ -781,7 +781,7 @@ export default function AltTextSuggestions() {
               <Divider />
 
               <Checkbox
-                label="Select All Pending"
+                label="Select everything to review"
                 checked={selectedImages.length === images.filter(img => img.status === 'pending').length && images.filter(img => img.status === 'pending').length > 0}
                 onChange={handleSelectAll}
               />
@@ -790,7 +790,7 @@ export default function AltTextSuggestions() {
                 {images.length === 0 ? (
                   <Box padding="1600">
                     <BlockStack gap="400" inlineAlign="center">
-                      <Text variant="headingMd" as="h3" alignment="center">No products found</Text>
+                      <Text variant="headingMd" as="h3" alignment="center">No products with photos yet</Text>
                       <Text variant="bodyMd" as="p" tone="subdued" alignment="center">
                         Add products with images to get started.
                       </Text>
@@ -816,14 +816,14 @@ export default function AltTextSuggestions() {
                             <InlineStack align="space-between">
                               <Box width="65%">
                                 <BlockStack gap="200">
-                                  <Text variant="bodySm" as="p" fontWeight="semibold">Current Alt Text</Text>
+                                  <Text variant="bodySm" as="p" fontWeight="semibold">Alt text today</Text>
                                   <Text variant="bodyMd" as="p" tone={image.currentAlt ? undefined : 'subdued'}>
                                     {image.currentAlt || 'No alt text'}
                                   </Text>
                                 </BlockStack>
                               </Box>
                               <BlockStack gap="200" inlineAlign="end">
-                                <Text variant="bodySm" as="p" tone="subdued">SEO Score</Text>
+                                <Text variant="bodySm" as="p" tone="subdued">Search score</Text>
                                 <Badge tone={getSeoScoreStatus(image.seoScore)}>{image.seoScore}%</Badge>
                               </BlockStack>
                             </InlineStack>
@@ -832,7 +832,7 @@ export default function AltTextSuggestions() {
 
                             <BlockStack gap="300">
                               <InlineStack gap="200" blockAlign="center">
-                                <Text variant="bodySm" as="p" fontWeight="semibold">AI Suggested Alt Text</Text>
+                                <Text variant="bodySm" as="p" fontWeight="semibold">Suggested by Alt Writer</Text>
                                 <Text variant="bodySm" as="span" tone="subdued">(applied to all {image.imageCount} images)</Text>
                                 {image.status === 'applied' && <Badge tone="success">Applied</Badge>}
                               </InlineStack>
@@ -842,7 +842,7 @@ export default function AltTextSuggestions() {
                                 disabled={image.status === 'applied'}
                                 multiline={2}
                                 autoComplete="off"
-                                placeholder="Click 'Generate AI Suggestions' to analyze images with AI..."
+                                placeholder="Press 'Write suggestions' and Alt Writer will describe this photo…"
                               />
                             </BlockStack>
 
@@ -853,7 +853,7 @@ export default function AltTextSuggestions() {
                                 loading={isSubmitting && !isGenerating}
                                 disabled={isSubmitting}
                               >
-                                Apply This Alt Text
+                                Apply
                               </Button>
                             )}
                           </BlockStack>

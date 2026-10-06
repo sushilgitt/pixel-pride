@@ -17,23 +17,29 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <p className={styles.eyebrow}>◆ Pixel Pride</p>
-        <h1 className={styles.heading}>Lighter images. Higher rankings.</h1>
+        <p className={styles.eyebrow}>
+          <span className={styles.mark} aria-hidden="true"><i /><i /><i /></span>
+          Pixel Pride
+        </p>
+        <h1 className={styles.heading}>
+          Every pixel, <em>perfectly tuned.</em>
+        </h1>
         <p className={styles.text}>
-          The image optimization & SEO suite for Shopify. Compress to WebP, write AI alt text, and track page speed.
+          Compression, AI alt text and speed testing for Shopify product photos — so your store looks
+          sharp and loads fast.
         </p>
         <p className={styles.note}>
-          Install Pixel Pride from the Shopify App Store, then open it from your Shopify admin.
+          Get Pixel Pride from the Shopify App Store, then open it from Apps in your Shopify admin.
         </p>
         <ul className={styles.list}>
           <li>
-            <strong>AI alt text</strong> Generate SEO-optimized alt text for product images using AI vision.
+            <strong>Compress</strong> Product photos become lean WebP files, replaced right on the product.
           </li>
           <li>
-            <strong>Smart compression</strong> Shrink product images with automatic WebP conversion and compression.
+            <strong>Alt Writer</strong> AI describes each photo so shoppers and search engines know what is in it.
           </li>
           <li>
-            <strong>Page speed reports</strong> Track Core Web Vitals and PageSpeed improvements in real-time.
+            <strong>Speed Lab</strong> On-demand Lighthouse tests show how much faster your pages got.
           </li>
         </ul>
       </div>

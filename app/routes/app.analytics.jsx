@@ -370,7 +370,7 @@ export async function action({ request }) {
       return { 
         success: true, 
         csv,
-        filename: `image-optimization-report-${timeRange}-${Date.now()}.csv`
+        filename: `pixelpride-report-${timeRange}-${Date.now()}.csv`
       };
     } catch (error) {
       console.error('Error generating report:', error);
@@ -445,22 +445,22 @@ export default function ImageOptimizationDashboard() {
 
   return (
     <Page
-      title="Optimization Analytics"
-      subtitle="Measured results from your image optimization runs"
+      title="Compression analytics"
+      subtitle="Measured results from your compression runs"
       primaryAction={{ 
         content: 'Export Report', 
         onAction: handleExportReport 
       }}
       secondaryActions={[
         {
-          content: 'Optimize Products',
-          url: '/app/product-optimization'
+          content: 'Compress products',
+          url: '/app/optimize'
         }
       ]}
     >
       <Layout>
         <Layout.Section>
-          <PageHeader icon={ChartVerticalIcon} eyebrow="Analytics" title="Optimization Analytics" subtitle="Size savings, compression rates & format breakdown" />
+          <PageHeader icon={ChartVerticalIcon} eyebrow="Analytics" title="Compression analytics" subtitle="Weight removed, compression rates and format mix" />
         </Layout.Section>
         {loadError && (
           <Layout.Section>

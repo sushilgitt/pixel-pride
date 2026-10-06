@@ -38,5 +38,4 @@ uri = "https://pixelpride.173.212.233.194.sslip.io/webhooks/products/create"
 embedded = false
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = false
