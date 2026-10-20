@@ -34,7 +34,6 @@ import {
   Thumbnail, 
   Divider, 
   Banner,
-  Select,
   ProgressBar,
   Pagination
 } from '@shopify/polaris';
@@ -46,7 +45,7 @@ const PAGE_SIZE = 20;
 // or browser timeout — the client drives the loop and shows live progress.
 const GEN_BATCH_SIZE = 5;
 
-// Prefer IPv4 + cap every upstream call so a slow OpenAI/Anthropic/CDN response
+// Prefer IPv4 + cap every upstream call so a slow OpenAI/CDN response
 // can never stall a request indefinitely (the old monolithic flow had no cap
 // and would hang for minutes, making the feature look broken).
 let dnsConfigured = false;
@@ -64,35 +63,6 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 20000) {
     return await fetch(url, { ...opts, signal: controller.signal });
   } finally {
     clearTimeout(timer);
-  }
-}
-
-async function verifyOpenAIKey() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { success: false, error: 'API key not configured' };
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'Reply with just: working' }]
-      })
-    });
-
-    if (response.ok) {
-      return { success: true, workingModel: 'gpt-4o-mini', message: 'API key verified! Using gpt-4o-mini' };
-    } else {
-      const errorData = await response.json();
-      return { success: false, error: `API Error: ${errorData.error?.message}` };
-    }
-  } catch (error) {
-    return { success: false, error: `Connection error: ${error.message}` };
   }
 }
 
@@ -172,10 +142,6 @@ export async function action({ request }) {
   const formData = await request.formData();
   const actionType = formData.get('actionType');
 
-  if (actionType === 'verifyApiKey') {
-    return await verifyOpenAIKey();
-  }
-
   // Apply one product's caption to ALL of its images (chunked under Shopify's
   // 250-file limit). Returns the first userError message, or null on success.
   async function writeAltToFiles(files) {
@@ -245,18 +211,17 @@ export async function action({ request }) {
   if (actionType === 'generateSuggestions') {
     try {
       const imagesData = JSON.parse(formData.get('images'));
-      const aiProvider = formData.get('aiProvider') || 'openai';
 
       const suggestions = await Promise.all(
         imagesData.map(async (image) => {
           try {
-            const suggestion = await generateAIAltText(image.url, image.productTitle, aiProvider);
+            const suggestion = await generateWithOpenAI(image.url, image.productTitle);
             return { id: image.id, suggestedAlt: suggestion.altText, seoScore: suggestion.seoScore };
           } catch (error) {
             // The AI call failed (bad/expired key, no quota, image unreachable…).
             // Log it AND tag the row so the UI can warn the merchant instead of
             // silently passing off the truncated product title as an "AI" result.
-            console.error(`AI alt text failed for image ${image.id} via ${aiProvider}: ${error.message}`);
+            console.error(`AI alt text failed for image ${image.id}: ${error.message}`);
             return {
               id: image.id,
               suggestedAlt: generateSmartFallback(image.productTitle),
@@ -268,8 +233,8 @@ export async function action({ request }) {
         })
       );
 
-      // If every image fell back, the provider is down/misconfigured — surface
-      // the real reason so the merchant knows to fix their API key, not retry.
+      // Report fallbacks so the UI can tell the merchant those suggestions are
+      // just the product title (the real reason is in the server log).
       const aiError = suggestions.find(s => s.aiError)?.aiError || null;
       const fallbackCount = suggestions.filter(s => s.usedFallback).length;
       return { success: true, kind: 'suggestions', suggestions, aiError, fallbackCount };
@@ -290,17 +255,6 @@ function calculateSeoScore(altText) {
   if (altText.match(/\b(color|size|style|material|pattern|texture|design|quality)\b/i)) score += 10;
   if (altText.length > 20 && altText.length < 125) score += 10;
   return Math.min(score, 100);
-}
-
-async function generateAIAltText(imageUrl, productTitle, provider = 'openai') {
-  switch (provider) {
-    case 'openai':
-      return await generateWithOpenAI(imageUrl, productTitle);
-    case 'anthropic':
-      return await generateWithAnthropic(imageUrl, productTitle);
-    default:
-      return generateSmartFallbackObject(productTitle);
-  }
 }
 
 async function generateWithOpenAI(imageUrl, productTitle) {
@@ -355,84 +309,12 @@ Return ONLY the alt text, nothing else.`
   return { altText, seoScore: calculateSeoScore(altText) };
 }
 
-async function generateWithAnthropic(imageUrl, productTitle) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
-
-  const imageResponse = await fetchWithTimeout(imageUrl, {}, 20000);
-  if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status}`);
-
-  const imageBuffer = await imageResponse.arrayBuffer();
-  const base64Image = Buffer.from(imageBuffer).toString('base64');
-
-  let mediaType = 'image/jpeg';
-  const urlLower = imageUrl.toLowerCase();
-  if (urlLower.includes('.png')) mediaType = 'image/png';
-  else if (urlLower.includes('.webp')) mediaType = 'image/webp';
-  else if (urlLower.includes('.gif')) mediaType = 'image/gif';
-
-  const response = await fetchWithTimeout('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 150,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: mediaType, data: base64Image }
-          },
-          {
-            type: 'text',
-            text: `Generate SEO-optimized alt text for this e-commerce product image.
-
-Product: ${productTitle}
-
-Requirements:
-- Include specific visual details (color, material, style, pattern)
-- Describe what you actually see in the image
-- Keep it under 125 characters
-- Make it natural and descriptive
-- Don't use "image of" or "picture of"
-- Focus on features that help customers understand the product
-
-Return ONLY the alt text, nothing else.`
-          }
-        ]
-      }]
-    })
-  }, 30000);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Anthropic API error: ${response.status} - ${errorText}`);
-  }
-
-  const result = await response.json();
-  let altText = result.content[0]?.text?.trim() || '';
-  altText = altText.replace(/^["']|["']$/g, '').replace(/\n/g, ' ').replace(/\s+/g, ' ');
-  if (altText.length > 125) altText = altText.substring(0, 122) + '...';
-
-  return { altText, seoScore: calculateSeoScore(altText) };
-}
-
 // Used only when the AI provider fails. Returns the product title alone — a
 // factual caption — rather than inventing attributes (material, colour, quality)
 // the product may not have. Rows using it are flagged `usedFallback` in the UI.
 function generateSmartFallback(productTitle) {
   const altText = String(productTitle || "").trim();
   return altText.length > 125 ? altText.substring(0, 122) + "..." : altText;
-}
-
-function generateSmartFallbackObject(productTitle) {
-  const altText = generateSmartFallback(productTitle);
-  return { altText, seoScore: calculateSeoScore(altText) };
 }
 
 export default function AltTextSuggestions() {
@@ -448,15 +330,12 @@ export default function AltTextSuggestions() {
   const [selectedImages, setSelectedImages] = useState([]);
   const [error, setError] = useState(loadError || null);
   const [successMessage, setSuccessMessage] = useState(null);
-  const [aiProvider, setAiProvider] = useState('openai');
-  const [isVerifying, setIsVerifying] = useState(false);
   const [page, setPage] = useState(0);
 
   // Live progress for the batched generation loop: queue of remaining batches
   // plus a {done,total} counter so the user sees movement instead of a frozen
   // spinner during a long single request.
   const genQueueRef = useRef([]);
-  const genProviderRef = useRef('openai');
   const [genProgress, setGenProgress] = useState(null); // { done, total } | null
 
   const isGenerating = genProgress !== null;
@@ -473,7 +352,6 @@ export default function AltTextSuggestions() {
     }
     const formData = new FormData();
     formData.append('actionType', 'generateSuggestions');
-    formData.append('aiProvider', genProviderRef.current);
     formData.append('images', JSON.stringify(batch.map(img => ({
       id: img.id, url: img.url, productTitle: img.productTitle
     }))));
@@ -499,7 +377,7 @@ export default function AltTextSuggestions() {
       // (the truncated product title) looks identical to the original and the
       // failure is invisible.
       if (data.aiError) {
-        setError(`AI generation failed — showing fallback text (your product title), not a real AI description. Reason: ${data.aiError}. Check your AI provider API key/credits in the app settings.`);
+        setError(`AI writing is temporarily unavailable for ${data.fallbackCount} product${data.fallbackCount === 1 ? '' : 's'}, so the product title was suggested instead. Clear those suggestions and try again in a few minutes.`);
       }
       setGenProgress(prev => prev ? { ...prev, done: Math.min(prev.total, prev.done + data.suggestions.length) } : prev);
     } else if (data.error) {
@@ -509,23 +387,9 @@ export default function AltTextSuggestions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genFetcher.state, genFetcher.data]);
 
-  const handleVerifyApiKey = useCallback(() => {
-    setError(null);
-    setSuccessMessage(null);
-    setIsVerifying(true);
-    const formData = new FormData();
-    formData.append('actionType', 'verifyApiKey');
-    submit(formData, { method: 'post' });
-  }, [submit]);
-
   useEffect(() => {
-    if (actionData?.workingModel) {
-      setSuccessMessage(actionData.message);
-      setIsVerifying(false);
-      setTimeout(() => setSuccessMessage(null), 5000);
-    } else if (actionData?.error) {
+    if (actionData?.error) {
       setError(actionData.error);
-      setIsVerifying(false);
     } else if (actionData?.message) {
       setSuccessMessage(actionData.message);
       setTimeout(() => setSuccessMessage(null), 3000);
@@ -554,10 +418,9 @@ export default function AltTextSuggestions() {
       batches.push(pendingImages.slice(i, i + GEN_BATCH_SIZE));
     }
     genQueueRef.current = batches;
-    genProviderRef.current = aiProvider;
     setGenProgress({ done: 0, total: pendingImages.length });
     submitNextBatch();
-  }, [images, aiProvider, isGenerating, selectedImages, submitNextBatch]);
+  }, [images, isGenerating, selectedImages, submitNextBatch]);
 
   const handleSelectImage = useCallback((id) => {
     setSelectedImages(prev => prev.includes(id) ? prev.filter(imgId => imgId !== id) : [...prev, id]);
@@ -620,11 +483,6 @@ export default function AltTextSuggestions() {
     if (score >= 60) return 'warning';
     return 'critical';
   };
-
-  const aiProviderOptions = [
-    { label: 'OpenAI GPT-4o-mini (Recommended)', value: 'openai' },
-    { label: 'Smart Fallback (No API)', value: 'fallback' }
-  ];
 
   // Each row is a PRODUCT (one caption per product, applied to all its images).
   const pendingCount = images.filter(img => img.status === 'pending').length;
@@ -698,14 +556,6 @@ export default function AltTextSuggestions() {
                   </BlockStack>
                 </InlineStack>
                 <InlineStack gap="300" blockAlign="end">
-                  <Box minWidth="220px">
-                    <Select
-                      label=""
-                      options={aiProviderOptions}
-                      value={aiProvider}
-                      onChange={setAiProvider}
-                    />
-                  </Box>
                   <Button onClick={generateSuggestions} loading={isGenerating} disabled={isGenerating}>
                     {isGenerating
                       ? `Writing ${genProgress.done}/${genProgress.total}…`
