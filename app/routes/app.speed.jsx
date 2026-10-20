@@ -53,7 +53,22 @@ const PRODUCTS_QUERY = `#graphql
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// One PSI attempt. Throws { retryable } so the caller can decide to retry.
+// PSI failures carry a `code` so the action can tell the merchant what actually
+// went wrong (and what to do) instead of one generic "try again" message:
+//   quota       — daily quota used up (the keyless endpoint's shared quota is
+//                 routinely exhausted; set GOOGLE_PAGESPEED_API_KEY)
+//   key         — the configured API key is invalid / PSI API not enabled
+//   password    — storefront is password-protected, so PSI only sees /password
+//   unreachable — Lighthouse couldn't load the page (unpublished, 404, …)
+//   timeout / network / unknown — transient, worth another try
+function psiError(message, code, retryable) {
+  const err = new Error(message);
+  err.code = code;
+  err.retryable = retryable;
+  return err;
+}
+
+// One PSI attempt. Throws psiError so the caller can decide to retry.
 async function pageSpeedAttempt(apiUrl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
@@ -62,9 +77,9 @@ async function pageSpeedAttempt(apiUrl) {
     response = await fetch(apiUrl, { signal: controller.signal });
   } catch (e) {
     // Network error or our 45s abort — transient, worth retrying.
-    const err = new Error(e?.name === 'AbortError' ? 'PageSpeed request timed out' : `PageSpeed network error: ${e?.message || e}`);
-    err.retryable = true;
-    throw err;
+    throw e?.name === 'AbortError'
+      ? psiError('PageSpeed request timed out', 'timeout', true)
+      : psiError(`PageSpeed network error: ${e?.message || e}`, 'network', true);
   } finally {
     clearTimeout(timer);
   }
@@ -72,10 +87,22 @@ async function pageSpeedAttempt(apiUrl) {
   if (!response.ok) {
     let detail = '';
     try { detail = (await response.json())?.error?.message || ''; } catch { /* non-JSON */ }
-    const err = new Error(`PageSpeed API request failed (${response.status})${detail ? `: ${detail}` : ''}`);
-    // 429 (rate limit) and 5xx are transient; other 4xx (bad/unreachable URL) are not.
-    err.retryable = response.status === 429 || response.status >= 500;
-    throw err;
+    const message = `PageSpeed API request failed (${response.status})${detail ? `: ${detail}` : ''}`;
+    if (response.status === 429) {
+      // A per-day quota won't recover within our backoff window; per-minute will.
+      const daily = /per day/i.test(detail);
+      throw psiError(message, 'quota', !daily);
+    }
+    if (/API key|API_KEY|has not been used|is disabled/i.test(detail)) {
+      throw psiError(message, 'key', false);
+    }
+    if (/Lighthouse returned error/i.test(detail)) {
+      // e.g. FAILED_DOCUMENT_REQUEST / ERRORED_DOCUMENT_REQUEST / NO_FCP —
+      // usually the page itself can't be loaded; 5xx variants can be flaky.
+      throw psiError(message, 'unreachable', response.status >= 500);
+    }
+    // Other 5xx are transient; other 4xx (bad URL) are not.
+    throw psiError(message, 'unknown', response.status >= 500);
   }
 
   const data = await response.json();
@@ -83,9 +110,14 @@ async function pageSpeedAttempt(apiUrl) {
   if (!lighthouseResult) {
     // Sometimes PSI returns 200 with a lighthouse runtime error (e.g. page slow
     // to load) — treat as retryable, a re-run often succeeds.
-    const err = new Error('No Lighthouse data in response');
-    err.retryable = true;
-    throw err;
+    throw psiError('No Lighthouse data in response', 'unknown', true);
+  }
+
+  // A password-protected storefront redirects every page to /password, and
+  // PSI happily scores that page instead — a meaningless result, so reject it.
+  const finalUrl = lighthouseResult.finalDisplayedUrl || lighthouseResult.finalUrl || '';
+  if (/\/password(\b|$|\?)/.test(finalUrl)) {
+    throw psiError(`Storefront redirected to ${finalUrl}`, 'password', false);
   }
 
   const performanceScore = Math.round((lighthouseResult.categories.performance?.score || 0) * 100);
@@ -111,14 +143,15 @@ async function pageSpeedAttempt(apiUrl) {
 
 /**
  * Run a real Lighthouse performance test via Google PageSpeed Insights API.
- * The keyless endpoint is rate-limited, so failures are often transient — we
- * retry with backoff (up to 3 attempts) on 429/5xx/timeout, which makes the
- * test reliable without requiring a GOOGLE_PAGESPEED_API_KEY (one still raises
- * the limits further if set). Returns null only after all attempts fail.
+ * Retries with backoff (up to 3 attempts) on transient failures. Set
+ * GOOGLE_PAGESPEED_API_KEY in production: without it requests share Google's
+ * keyless quota, which is routinely exhausted for the day (HTTP 429).
+ * Throws the last psiError (with its `code`) after all attempts fail.
  */
 async function runPageSpeedTest(url) {
   const apiKey = process.env.GOOGLE_PAGESPEED_API_KEY;
-  const keyParam = apiKey ? `&key=${apiKey}` : '';
+  if (!apiKey) console.warn('[SPEED] GOOGLE_PAGESPEED_API_KEY not set — using the shared keyless quota');
+  const keyParam = apiKey ? `&key=${encodeURIComponent(apiKey)}` : '';
   const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&category=performance&strategy=mobile${keyParam}`;
 
   const backoffs = [0, 2000, 5000]; // before attempts 1, 2, 3
@@ -134,7 +167,25 @@ async function runPageSpeedTest(url) {
     }
   }
   console.error('PageSpeed test failed after retries:', lastErr?.message || lastErr);
-  return null;
+  throw lastErr;
+}
+
+// Merchant-facing explanation (and next step) for each psiError code.
+function pageSpeedErrorMessage(err) {
+  switch (err?.code) {
+    case 'password':
+      return 'Your storefront is password-protected, so Google can only see the password page. Remove the password (Online Store › Preferences › Password protection) and run the test again.';
+    case 'unreachable':
+      return "Google couldn't load this product page. Make sure the product is active and published to the Online Store sales channel, then try again.";
+    case 'quota':
+      return process.env.GOOGLE_PAGESPEED_API_KEY
+        ? "Google PageSpeed's request limit has been reached. Please try again later."
+        : "Google PageSpeed's shared request limit has been reached for today. Please try again later.";
+    case 'key':
+      return "Google PageSpeed rejected the app's API key. Please contact Pixel Pride support.";
+    default:
+      return "Google PageSpeed couldn't finish the test right now (it can be slow or briefly unavailable). Please try again in a moment.";
+  }
 }
 
 /**
@@ -292,10 +343,6 @@ export async function action({ request }) {
     try {
       const result = await runPageSpeedTest(pageUrl);
 
-      if (!result) {
-        throw new Error('Failed to run PageSpeed test');
-      }
-
       return {
         success: true,
         message: `PageSpeed test completed for ${pageName || pageUrl}. Performance Score: ${result.score}/100`,
@@ -305,10 +352,10 @@ export async function action({ request }) {
       };
     } catch (error) {
       console.error('Error running PageSpeed analysis:', error);
-      const detail = error?.message ? ` (${error.message})` : '';
       return {
         success: false,
-        error: `Google PageSpeed couldn't analyze this page right now${detail}. This is usually temporary (Google rate limits) or because the page isn't publicly reachable yet (an unpublished or password-protected storefront). Your measured optimization savings below are unaffected — please try the live test again in a moment.`
+        errorCode: error?.code || 'unknown',
+        error: `${pageSpeedErrorMessage(error)} Your measured savings below are unaffected.`
       };
     }
   }
