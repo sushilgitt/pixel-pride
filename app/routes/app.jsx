@@ -19,15 +19,14 @@ export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
 
   // Free-tier defaults; refined from the live subscription below.
-  let features = { pageSpeed: false, altText: false };
+  let features = { altText: false };
   try {
     // Subscription state decides which features unlock. Cached per-shop
     // (positive results only) so paying merchants don't pay a Shopify roundtrip
     // on every click; a fresh subscribe still unlocks instantly.
     const state = await getBillingStateCached(admin, session.shop);
-    // Entitlement booleans drive which nav items render (Page Speed, Alt Text).
+    // Entitlement booleans drive which nav items render (Alt Text).
     features = {
-      pageSpeed: entitled(state.plan, "pageSpeed"),
       altText: entitled(state.plan, "altText"),
     };
   } catch (e) {
@@ -78,9 +77,6 @@ export default function App() {
           <a href="/app/optimize">Compress</a>
           {features?.altText && (
             <a href="/app/alt-text">Alt Writer</a>
-          )}
-          {features?.pageSpeed && (
-            <a href="/app/speed">Speed Lab</a>
           )}
           <a href="/app/plan">Plan</a>
         </ui-nav-menu>

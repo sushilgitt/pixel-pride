@@ -20,7 +20,6 @@ export const FEATURES = [
   "webp",          // WebP conversion
   "altText",       // AI alt text
   "autoOptimize",  // background auto-optimize new products
-  "pageSpeed",     // PageSpeed Insights reports
 ];
 
 function feat(...enabled) {
@@ -54,7 +53,7 @@ export const PLANS = [
     price: 99,
     priceAnnual: 990,
     monthlyImages: 15000,
-    features: feat("optimize", "webp", "altText", "autoOptimize", "pageSpeed"),
+    features: feat("optimize", "webp", "altText", "autoOptimize"),
   },
   {
     tier: "pro",
@@ -62,7 +61,7 @@ export const PLANS = [
     price: 350,
     priceAnnual: 3500,
     monthlyImages: 50000,
-    features: feat("optimize", "webp", "altText", "autoOptimize", "pageSpeed"),
+    features: feat("optimize", "webp", "altText", "autoOptimize"),
   },
 ];
 

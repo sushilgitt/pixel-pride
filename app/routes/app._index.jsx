@@ -10,7 +10,6 @@ import {
   ImageMagicIcon,
   MagicIcon,
   AutomationIcon,
-  GaugeIcon,
   PlanIcon,
   ImagesIcon,
   CheckCircleIcon,
@@ -41,7 +40,6 @@ export const loader = async ({ request }) => {
       tier: plan?.tier || "free",
       monthlyImages: plan?.monthlyImages ?? 100,
       altText: entitled(plan, "altText"),
-      pageSpeed: entitled(plan, "pageSpeed"),
       autoOptimizeAllowed: entitled(plan, "autoOptimize"),
     },
     usage,
@@ -91,15 +89,6 @@ export default function Index() {
       onClick: () => navigate(plan.autoOptimizeAllowed ? "/app/optimize" : "/app/plan"),
       available: plan.autoOptimizeAllowed,
       badge: autoStatus,
-    },
-    {
-      icon: GaugeIcon,
-      title: "Speed Lab",
-      desc: "Run live Lighthouse tests on product pages and see exactly how much image weight you have shed.",
-      cta: plan.pageSpeed ? "Open Speed Lab" : "Unlock with Growth",
-      onClick: () => navigate(plan.pageSpeed ? "/app/speed" : "/app/plan"),
-      available: plan.pageSpeed,
-      badge: plan.pageSpeed ? undefined : { label: "Growth+", tone: "attention" },
     },
   ];
 

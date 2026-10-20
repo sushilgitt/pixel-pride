@@ -41,7 +41,6 @@ export const PLAN_TIERS = [
       "15,000 credits a month",
       "All Starter features",
       "Autopilot for new products",
-      "Speed Lab Lighthouse tests",
     ],
   },
   {

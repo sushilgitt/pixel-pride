@@ -19,7 +19,6 @@ const FEATURE_LABELS = {
   optimize: "WebP compression",
   altText: "Alt Writer (AI alt text)",
   autoOptimize: "Autopilot for new products",
-  pageSpeed: "Speed Lab reports",
 };
 
 export const loader = async ({ request }) => {

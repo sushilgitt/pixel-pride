@@ -25,7 +25,7 @@ export default function App() {
           Every pixel, <em>perfectly tuned.</em>
         </h1>
         <p className={styles.text}>
-          Compression, AI alt text and speed testing for Shopify product photos — so your store looks
+          Compression, AI alt text and hands-free automation for Shopify product photos — so your store looks
           sharp and loads fast.
         </p>
         <p className={styles.note}>
@@ -39,7 +39,7 @@ export default function App() {
             <strong>Alt Writer</strong> AI describes each photo so shoppers and search engines know what is in it.
           </li>
           <li>
-            <strong>Speed Lab</strong> On-demand Lighthouse tests show how much faster your pages got.
+            <strong>Autopilot</strong> New products are compressed automatically the moment they are created.
           </li>
         </ul>
       </div>
