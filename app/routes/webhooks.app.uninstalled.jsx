@@ -1,5 +1,6 @@
 import { authenticateWebhookWithoutSession } from "../webhooks.server";
 import db from "../db.server";
+import { clearBillingCache } from "../billing.server";
 
 export const action = async ({ request }) => {
   const { shop, topic } = await authenticateWebhookWithoutSession(request);
@@ -9,6 +10,7 @@ export const action = async ({ request }) => {
   // Idempotent: safe if the webhook is retried or sessions are already gone.
   // Usage and settings are kept until shop/redact (see webhooks.compliance).
   await db.session.deleteMany({ where: { shop } });
+  clearBillingCache(shop);
 
   return new Response();
 };

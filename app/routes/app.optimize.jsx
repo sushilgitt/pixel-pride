@@ -1,9 +1,9 @@
 import PageHeader from "../components/PageHeader";
 import { ImageMagicIcon } from "@shopify/polaris-icons";
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { useLoaderData, useFetcher, useRevalidator } from 'react-router';
+import { useState, useCallback, useEffect, useRef, useMemo, Suspense } from 'react';
+import { useLoaderData, useFetcher, useRevalidator, Await } from 'react-router';
 import { authenticate } from '../shopify.server';
-import { getBillingStateCached } from '../billing.server';
+import { getBillingStateCached, isDocumentRequest } from '../billing.server';
 import { getUsage, getRemaining } from '../usage.server';
 import { entitled } from '../plans.server';
 import db from '../db.server';
@@ -21,7 +21,11 @@ import {
   Thumbnail,
   Banner,
   Select,
-  EmptyState
+  EmptyState,
+  Card,
+  BlockStack,
+  SkeletonBodyText,
+  SkeletonDisplayText
 } from '@shopify/polaris';
 
 /* -------------------------------------------------------------------------- */
@@ -53,32 +57,10 @@ const PRODUCTS_QUERY = `#graphql
 /*  Loader                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export async function loader({ request }) {
-  const { admin, session } = await authenticate.admin(request);
-  const url = new URL(request.url);
-  const filter = url.searchParams.get('filter') || 'all';
-  const sortBy = url.searchParams.get('sortBy') || 'score_asc';
-
-  // Plan, usage and per-shop settings drive the quota meter + auto-optimize UI.
-  let plan = null;
-  try {
-    const state = await getBillingStateCached(admin, session.shop);
-    plan = state.plan;
-  } catch { /* fall through to Free defaults below */ }
-  let usage = { period: '', imagesUsed: 0 };
-  let autoOptimize = false;
-  try {
-    usage = await getUsage(session.shop);
-    const settings = await db.shopSettings.findUnique({ where: { shop: session.shop } });
-    autoOptimize = settings?.autoOptimize ?? false;
-  } catch { /* usage/settings tables not ready yet — default to zero/off */ }
-  const planInfo = {
-    tier: plan?.tier || 'free',
-    name: plan?.name || 'Free',
-    monthlyImages: plan?.monthlyImages ?? 100,
-    autoOptimizeAllowed: entitled(plan, 'autoOptimize'),
-  };
-
+// Loads + scores the whole catalog. Returned to the page as an unawaited
+// promise (streamed), so navigation renders the page immediately and the
+// product list fills in when this resolves.
+async function loadCatalog(admin) {
   try {
     const { products } = await fetchAllProducts(admin, PRODUCTS_QUERY);
 
@@ -148,11 +130,6 @@ export async function loader({ request }) {
     // from this list, so changing a filter never re-runs this (heavy) loader.
     return {
       products: processedProducts,
-      filter,
-      sortBy,
-      plan: planInfo,
-      usage,
-      autoOptimize,
       stats: {
         total: processedProducts.length,
         needsOptimization: processedProducts.filter(p => p.needsOptimization).length,
@@ -167,15 +144,46 @@ export async function loader({ request }) {
     console.error('Error loading products:', error);
     return {
       products: [],
-      filter,
-      sortBy,
-      plan: planInfo,
-      usage,
-      autoOptimize,
       stats: { total: 0, needsOptimization: 0, optimized: 0, totalImages: 0, totalSizeMB: 0, potentialSavingsMB: 0 },
       error: 'Failed to load products',
     };
   }
+}
+
+export async function loader({ request }) {
+  const { admin, session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const filter = url.searchParams.get('filter') || 'all';
+  const sortBy = url.searchParams.get('sortBy') || 'score_asc';
+
+  // Plan, usage and per-shop settings drive the quota meter + auto-optimize UI.
+  // Billing (Shopify) and usage/settings (DB) are independent — fetch together.
+  const [plan, shopData] = await Promise.all([
+    getBillingStateCached(admin, session.shop, { fresh: isDocumentRequest(request) })
+      .then(s => s.plan)
+      .catch(() => null), // fall through to Free defaults below
+    Promise.all([
+      getUsage(session.shop),
+      db.shopSettings.findUnique({ where: { shop: session.shop } }),
+    ]).catch(() => null), // usage/settings tables not ready yet — default to zero/off
+  ]);
+  const usage = shopData?.[0] ?? { period: '', imagesUsed: 0 };
+  const autoOptimize = shopData?.[1]?.autoOptimize ?? false;
+  const planInfo = {
+    tier: plan?.tier || 'free',
+    name: plan?.name || 'Free',
+    monthlyImages: plan?.monthlyImages ?? 100,
+    autoOptimizeAllowed: entitled(plan, 'autoOptimize'),
+  };
+
+  return {
+    filter,
+    sortBy,
+    plan: planInfo,
+    usage,
+    autoOptimize,
+    catalog: loadCatalog(admin), // not awaited — streamed to the page
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -232,11 +240,44 @@ export async function action({ request }) {
 /*  UI                                                                        */
 /* -------------------------------------------------------------------------- */
 
+const PAGE_HEADER = (
+  <PageHeader icon={ImageMagicIcon} eyebrow="Compress" title="Image compression" subtitle="Turn heavy product photos into lean WebP files, swapped in place on each product" />
+);
+
+// Shown while the streamed catalog loads, so navigating here is instant.
+function OptimizerSkeleton() {
+  return (
+    <Page>
+      <Layout>
+        <Layout.Section>{PAGE_HEADER}</Layout.Section>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <SkeletonDisplayText size="small" />
+              <SkeletonBodyText lines={8} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
+  );
+}
+
 export default function ProductOptimization() {
-  const {
-    products, filter: initialFilter, sortBy: initialSortBy, stats, error: loadError,
-    plan, usage, autoOptimize: initialAutoOptimize,
-  } = useLoaderData();
+  const { catalog, ...data } = useLoaderData();
+  return (
+    <Suspense fallback={<OptimizerSkeleton />}>
+      <Await resolve={catalog}>
+        {(resolved) => <Optimizer {...data} {...resolved} />}
+      </Await>
+    </Suspense>
+  );
+}
+
+function Optimizer({
+  products, filter: initialFilter, sortBy: initialSortBy, stats, error: loadError,
+  plan, usage, autoOptimize: initialAutoOptimize,
+}) {
   const fetcher = useFetcher();
   const settingsFetcher = useFetcher();
   const revalidator = useRevalidator();
@@ -453,9 +494,7 @@ export default function ProductOptimization() {
   return (
     <Page>
       <Layout>
-        <Layout.Section>
-          <PageHeader icon={ImageMagicIcon} eyebrow="Compress" title="Image compression" subtitle="Turn heavy product photos into lean WebP files, swapped in place on each product" />
-        </Layout.Section>
+        <Layout.Section>{PAGE_HEADER}</Layout.Section>
 
         {error && (
           <Layout.Section>

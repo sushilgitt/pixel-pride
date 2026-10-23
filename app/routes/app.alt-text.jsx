@@ -1,18 +1,18 @@
 import PageHeader from "../components/PageHeader";
 import { MagicIcon } from "@shopify/polaris-icons";
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { useLoaderData, useSubmit, useNavigation, useActionData, useFetcher, redirect } from 'react-router';
+import { useState, useCallback, useEffect, useRef, Suspense } from 'react';
+import { useLoaderData, useSubmit, useNavigation, useActionData, useFetcher, redirect, Await } from 'react-router';
 import { authenticate } from '../shopify.server';
-import { getBillingStateCached } from '../billing.server';
+import { getBillingStateCached, isDocumentRequest } from '../billing.server';
 import { entitled } from '../plans.server';
 import { setDefaultResultOrder } from 'node:dns';
 import { fetchAllProducts, imageNodes, MAX_MEDIA_PER_PRODUCT } from '../catalog.server';
 
 // AI alt text is a Starter+ feature. Returns whether the shop's plan includes it;
 // lets a re-auth Response propagate, treats other failures as not-entitled.
-async function altTextAllowed(admin, shop) {
+async function altTextAllowed(admin, shop, request) {
   try {
-    const { plan } = await getBillingStateCached(admin, shop);
+    const { plan } = await getBillingStateCached(admin, shop, { fresh: isDocumentRequest(request) });
     return entitled(plan, 'altText');
   } catch (e) {
     if (e instanceof Response) throw e;
@@ -35,7 +35,9 @@ import {
   Divider, 
   Banner,
   ProgressBar,
-  Pagination
+  Pagination,
+  SkeletonBodyText,
+  SkeletonDisplayText
 } from '@shopify/polaris';
 
 const PAGE_SIZE = 20;
@@ -92,8 +94,13 @@ const PRODUCTS_QUERY = `#graphql
 export async function loader({ request }) {
   const { admin, session } = await authenticate.admin(request);
   // Tier boundary: AI alt text is Starter+. Free users go back to the app home.
-  if (!(await altTextAllowed(admin, session.shop))) throw redirect('/app');
+  if (!(await altTextAllowed(admin, session.shop, request))) throw redirect('/app');
 
+  // Not awaited — the catalog streams in so navigation renders immediately.
+  return { catalog: loadRows(admin) };
+}
+
+async function loadRows(admin) {
   try {
     // Alt text is generated ONCE per product (from its main image) and applied
     // to ALL of that product's images, so each row here is a PRODUCT, carrying
@@ -136,7 +143,7 @@ export async function loader({ request }) {
 export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   // Tier boundary: block alt-text generation for non-entitled (Free) plans.
-  if (!(await altTextAllowed(admin, session.shop))) {
+  if (!(await altTextAllowed(admin, session.shop, request))) {
     return { error: 'Alt Writer is included with Starter and above.' };
   }
   const formData = await request.formData();
@@ -317,8 +324,41 @@ function generateSmartFallback(productTitle) {
   return altText.length > 125 ? altText.substring(0, 122) + "..." : altText;
 }
 
+const PAGE_HEADER = (
+  <PageHeader icon={MagicIcon} eyebrow="Alt Writer" title="AI alt text" subtitle="AI reads each product's main photo and writes one caption for all of its images" />
+);
+
+// Shown while the streamed catalog loads, so navigating here is instant.
+function AltWriterSkeleton() {
+  return (
+    <Page>
+      <Layout>
+        <Layout.Section>{PAGE_HEADER}</Layout.Section>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="400">
+              <SkeletonDisplayText size="small" />
+              <SkeletonBodyText lines={8} />
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
+  );
+}
+
 export default function AltTextSuggestions() {
-  const { images: initialImages, loadError, truncated } = useLoaderData();
+  const { catalog } = useLoaderData();
+  return (
+    <Suspense fallback={<AltWriterSkeleton />}>
+      <Await resolve={catalog}>
+        {(resolved) => <AltWriter {...resolved} />}
+      </Await>
+    </Suspense>
+  );
+}
+
+function AltWriter({ images: initialImages, loadError, truncated }) {
   const actionData = useActionData();
   const submit = useSubmit();
   const navigation = useNavigation();
@@ -505,9 +545,7 @@ export default function AltTextSuggestions() {
     <Page
     >
       <Layout>
-        <Layout.Section>
-          <PageHeader icon={MagicIcon} eyebrow="Alt Writer" title="AI alt text" subtitle="AI reads each product's main photo and writes one caption for all of its images" />
-        </Layout.Section>
+        <Layout.Section>{PAGE_HEADER}</Layout.Section>
         {error && (
           <Layout.Section>
             <Banner title="Error" tone="critical" onDismiss={() => setError(null)}>

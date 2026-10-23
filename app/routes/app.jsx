@@ -4,7 +4,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider as ShopifyAppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
 import { authenticate, sessionStorage } from "../shopify.server";
-import { getBillingStateCached } from "../billing.server";
+import { getBillingStateCached, isDocumentRequest } from "../billing.server";
 import { entitled } from "../plans.server";
 
 import "@shopify/polaris/build/esm/styles.css";
@@ -21,10 +21,12 @@ export const loader = async ({ request }) => {
   // Free-tier defaults; refined from the live subscription below.
   let features = { altText: false };
   try {
-    // Subscription state decides which features unlock. Cached per-shop
-    // (positive results only) so paying merchants don't pay a Shopify roundtrip
-    // on every click; a fresh subscribe still unlocks instantly.
-    const state = await getBillingStateCached(admin, session.shop);
+    // Subscription state decides which features unlock. Cached per-shop so
+    // in-app navigation skips the Shopify roundtrip; full page loads (e.g.
+    // returning from the pricing page) re-check, so a subscribe unlocks instantly.
+    const state = await getBillingStateCached(admin, session.shop, {
+      fresh: isDocumentRequest(request),
+    });
     // Entitlement booleans drive which nav items render (Alt Text).
     features = {
       altText: entitled(state.plan, "altText"),

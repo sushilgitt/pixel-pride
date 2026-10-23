@@ -73,28 +73,47 @@ export async function getBillingState(admin, shop = null) {
 }
 
 // Per-shop cache of the billing state to avoid a Shopify GraphQL roundtrip on
-// EVERY page navigation. We deliberately cache only the POSITIVE result
-// (hasActivePlan === true): paying merchants — who navigate the app the most —
-// get instant page loads, while non-subscribers are always re-checked so the
-// moment they subscribe on Shopify's page and return, the app unlocks
-// instantly. A cancel relocks within BILLING_TTL_MS, which is fine.
+// EVERY page navigation. Paid results are kept longer than Free ones, and
+// `fresh: true` skips the cache entirely — callers pass it for full document
+// loads (see isDocumentRequest), which is how a merchant comes back from
+// Shopify's pricing page, so a new subscription still unlocks instantly while
+// in-app navigations reuse the cached state. Concurrent lookups for the same
+// shop (the /app layout and the page loader run in parallel) share one request.
 const billingCache = new Map(); // shop -> { state, expires }
-const BILLING_TTL_MS = 120 * 1000;
+const inflight = new Map(); // shop -> Promise<state>
+const PAID_TTL_MS = 120 * 1000;
+const FREE_TTL_MS = 30 * 1000;
 
-export async function getBillingStateCached(admin, shop) {
-  if (shop) {
+export async function getBillingStateCached(admin, shop, { fresh = false } = {}) {
+  if (!shop) return getBillingState(admin, shop);
+  if (!fresh) {
     const hit = billingCache.get(shop);
     if (hit && hit.expires > Date.now()) return hit.state;
   }
-  const state = await getBillingState(admin, shop);
-  if (shop) {
-    if (state.hasActivePlan) {
-      billingCache.set(shop, { state, expires: Date.now() + BILLING_TTL_MS });
-    } else {
-      billingCache.delete(shop);
-    }
-  }
-  return state;
+  const pending = inflight.get(shop);
+  if (pending) return pending;
+  const request = getBillingState(admin, shop)
+    .then((state) => {
+      const ttl = state.hasActivePlan ? PAID_TTL_MS : FREE_TTL_MS;
+      billingCache.set(shop, { state, expires: Date.now() + ttl });
+      return state;
+    })
+    .finally(() => inflight.delete(shop));
+  inflight.set(shop, request);
+  return request;
+}
+
+// Drop a shop's cached billing state (after a cancel or uninstall).
+export function clearBillingCache(shop) {
+  billingCache.delete(shop);
+}
+
+// True for a full page load of the embedded app (Sec-Fetch-Dest "iframe" /
+// "document"); false for React Router's client-side data fetches ("empty").
+// Browsers that don't send the header are treated as document loads.
+export function isDocumentRequest(request) {
+  const dest = request.headers.get("sec-fetch-dest");
+  return !dest || dest !== "empty";
 }
 
 // Builds the Shopify-hosted managed-pricing page URL where merchants can

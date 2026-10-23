@@ -4,6 +4,8 @@ import { useLoaderData, useSubmit, useNavigation, useActionData } from "react-ro
 import { authenticate } from "../shopify.server";
 import {
   getBillingState,
+  getBillingStateCached,
+  clearBillingCache,
   managedPricingUrl,
   appBridgeRedirect,
   cancelSubscription,
@@ -26,7 +28,9 @@ export const loader = async ({ request }) => {
 
   let state = { hasActivePlan: false, plan: null, appHandle: undefined };
   try {
-    state = await getBillingState(admin, session.shop);
+    // Always re-check here (and refresh the shared cache): this is where
+    // merchants look to confirm a plan change.
+    state = await getBillingStateCached(admin, session.shop, { fresh: true });
   } catch (e) {
     if (e instanceof Response) throw e;
   }
@@ -64,6 +68,7 @@ export const action = async ({ request }) => {
     if (!sub) return { cancelled: true };
     try {
       await cancelSubscription(admin, sub.id);
+      clearBillingCache(session.shop);
       return { cancelled: true };
     } catch (e) {
       console.error("[BILLING] in-app cancel failed, redirecting:", e?.message);

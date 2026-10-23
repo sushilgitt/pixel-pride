@@ -5,7 +5,10 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 
-export const streamTimeout = 5000;
+// React Router also uses this to reject still-pending streamed loader promises.
+// The Compress and Alt Writer pages stream the whole catalog (many paginated
+// Admin API calls on a large store), so give it room to finish.
+export const streamTimeout = 60000;
 
 export default async function handleRequest(
   request,

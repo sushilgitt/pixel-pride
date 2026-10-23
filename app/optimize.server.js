@@ -55,13 +55,26 @@ export async function mapLimit(items, limit, fn) {
   return results;
 }
 
+// Shopify CDN image URLs are versioned (?v=…), so a URL's size never changes.
+// Remember measured sizes so revisiting the optimizer doesn't re-HEAD every
+// image. Oldest entries are evicted first (Map keeps insertion order).
+const sizeCache = new Map(); // url -> MB
+const SIZE_CACHE_MAX = 50000;
+
 // Cheaply measure an image's size in MB via a HEAD request (no body download).
 export async function headSizeMB(url) {
+  const cached = sizeCache.get(url);
+  if (cached !== undefined) return cached;
   try {
     const res = await timedFetch(url, { method: "HEAD" }, 8000);
     if (!res.ok) return 0;
     const cl = res.headers.get("content-length");
-    return cl ? parseInt(cl, 10) / (1024 * 1024) : 0;
+    const mb = cl ? parseInt(cl, 10) / (1024 * 1024) : 0;
+    if (mb > 0) {
+      if (sizeCache.size >= SIZE_CACHE_MAX) sizeCache.delete(sizeCache.keys().next().value);
+      sizeCache.set(url, mb);
+    }
+    return mb;
   } catch {
     return 0;
   }

@@ -1,7 +1,7 @@
 import { useNavigate, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { getBillingStateCached } from "../billing.server";
+import { getBillingStateCached, isDocumentRequest } from "../billing.server";
 import { getUsage } from "../usage.server";
 import { entitled } from "../plans.server";
 import db from "../db.server";
@@ -19,20 +19,21 @@ import { BrandMark, Mosaic, PixelMeter } from "../components/Pixels";
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
 
-  let plan = null;
-  try {
-    plan = (await getBillingStateCached(admin, session.shop)).plan;
-  } catch (e) {
-    if (e instanceof Response) throw e; // let re-auth propagate
-  }
-
-  let usage = { imagesUsed: 0 };
-  let autoOptimize = false;
-  try {
-    usage = await getUsage(session.shop);
-    const settings = await db.shopSettings.findUnique({ where: { shop: session.shop } });
-    autoOptimize = settings?.autoOptimize ?? false;
-  } catch { /* usage/settings tables not ready — defaults */ }
+  // Billing (Shopify) and usage/settings (DB) are independent — fetch together.
+  const [plan, shopData] = await Promise.all([
+    getBillingStateCached(admin, session.shop, { fresh: isDocumentRequest(request) })
+      .then((s) => s.plan)
+      .catch((e) => {
+        if (e instanceof Response) throw e; // let re-auth propagate
+        return null;
+      }),
+    Promise.all([
+      getUsage(session.shop),
+      db.shopSettings.findUnique({ where: { shop: session.shop } }),
+    ]).catch(() => null), // usage/settings tables not ready — defaults
+  ]);
+  const usage = shopData?.[0] ?? { imagesUsed: 0 };
+  const autoOptimize = shopData?.[1]?.autoOptimize ?? false;
 
   return {
     plan: {

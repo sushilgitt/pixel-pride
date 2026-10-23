@@ -32,8 +32,8 @@ export const PLAN_TIERS = [
   },
   {
     name: "Growth",
-    price: 99,
-    priceAnnual: 990,
+    price: 60,
+    priceAnnual: 600,
     images: "15,000",
     tagline: "For busy catalogs",
     popular: true,

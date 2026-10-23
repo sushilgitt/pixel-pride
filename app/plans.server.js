@@ -50,8 +50,8 @@ export const PLANS = [
   {
     tier: "growth",
     name: "Growth",
-    price: 99,
-    priceAnnual: 990,
+    price: 60,
+    priceAnnual: 600,
     monthlyImages: 15000,
     features: feat("optimize", "webp", "altText", "autoOptimize"),
   },
